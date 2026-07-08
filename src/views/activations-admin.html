@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Activations — Silver Glider Admin</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:#0a0a0a;color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh}
+header{background:#111;border-bottom:1px solid #222;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:16px;font-weight:600;letter-spacing:.05em}
+header a{color:#555;font-size:13px;text-decoration:none}
+.container{max-width:900px;margin:0 auto;padding:32px 24px}
+.section{margin-bottom:40px}
+.section-title{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.1em;margin-bottom:16px}
+.card{background:#111;border:1px solid #222;border-radius:12px;padding:24px;margin-bottom:16px}
+input,textarea,select{width:100%;background:#1a1a1a;border:1px solid #2a2a2a;color:#f0f0f0;padding:10px 14px;border-radius:8px;font-size:14px;margin-bottom:10px;outline:none;font-family:inherit}
+input:focus,textarea:focus{border-color:#444}
+input::placeholder,textarea::placeholder{color:#444}
+textarea{resize:vertical;min-height:60px}
+.btn{background:#1CC5BE;color:#0a0a0a;border:none;padding:10px 20px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer}
+.btn-sm{background:#1a1a1a;border:1px solid #333;color:#ccc;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer}
+.btn-sm:hover{border-color:#555;color:#fff}
+.btn-danger{background:#1a1a1a;border:1px solid #333;color:#ff4444;padding:6px 14px;border-radius:6px;font-size:12px;cursor:pointer}
+.activation-row{display:flex;align-items:center;justify-content:space-between;padding:14px 0;border-bottom:1px solid #1a1a1a;gap:12px}
+.activation-row:last-child{border-bottom:none}
+.activation-name{font-size:15px;font-weight:600}
+.activation-slug{font-size:12px;color:#555;font-family:monospace;margin-top:2px}
+.actions{display:flex;gap:8px;flex-shrink:0}
+#detail-view{display:none}
+.back-link{color:#555;font-size:13px;cursor:pointer;margin-bottom:24px;display:inline-block}
+.back-link:hover{color:#fff}
+.participant-row{display:flex;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #1a1a1a}
+.participant-row:last-child{border-bottom:none}
+.participant-row img,.p-avatar{width:48px;height:48px;border-radius:8px;object-fit:cover;flex-shrink:0}
+.p-avatar{background:#1a1a1a;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:700;color:#444}
+.participant-info{flex:1}
+.participant-info .name{font-size:14px;font-weight:600}
+.participant-info .slug{font-size:12px;color:#555;font-family:monospace}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{text-align:left;padding:8px 12px;font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.05em;border-bottom:1px solid #1a1a1a}
+tbody td{padding:10px 12px;border-bottom:1px solid #161616}
+.score{font-weight:700;color:#f0f0f0}
+.qr-url{font-family:monospace;font-size:11px;color:#555;word-break:break-all}
+.tabs{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid #222;padding-bottom:0}
+.tab{padding:8px 16px;font-size:13px;color:#555;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab.active{color:#f0f0f0;border-bottom-color:#f0f0f0}
+#msg{font-size:13px;color:#4caf50;margin-top:8px;min-height:20px}
+.two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:600px){.two-col{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<header>
+  <a href="/" class="sg-logo"><img src="/logo.png" alt="Silver Glider"><div class="sg-logo-text"><span class="sg-logo-name">Silver Glider</span><span class="sg-logo-sub">Tickets</span></div></a>
+  <a href="/admin">&larr; Back to Admin</a>
+</header>
+<div class="container">
+
+  <div id="list-view">
+    <div class="section">
+      <p class="section-title">Create Activation</p>
+      <div class="card">
+        <div class="two-col">
+          <input type="text" id="new-name" placeholder="Activation name (e.g. Best Booth Awards)">
+          <input type="text" id="new-slug" placeholder="URL slug (e.g. best-booth-2026)">
+        </div>
+        <textarea id="new-desc" placeholder="Short description (optional)"></textarea>
+        <button class="btn" onclick="createActivation()">Create Activation</button>
+        <div id="msg"></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <p class="section-title">All Activations</p>
+      <div class="card" id="activations-list">
+        <p style="color:#444;font-size:14px">Loading...</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="detail-view">
+    <span class="back-link" onclick="showList()">&larr; All Activations</span>
+    <h2 id="detail-title" style="font-size:22px;font-weight:700;margin-bottom:4px"></h2>
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;flex-wrap:wrap">
+      <p id="detail-url" style="font-size:12px;color:#555;font-family:monospace;flex:1"></p>
+      <a id="master-qr-link" href="#" target="_blank" class="btn-sm" style="text-decoration:none;white-space:nowrap">Master QR</a>
+      <a id="winner-page-link" href="#" target="_blank" class="btn-sm" style="text-decoration:none;white-space:nowrap">Winner Page</a>
+      <button id="close-voting-btn" class="btn-sm" style="color:#ff4444;border-color:#3a1a1a;white-space:nowrap" onclick="closeVoting()">End Voting Now</button>
+      <input type="datetime-local" id="voting-ends-input" class="btn-sm" style="color:#aaa;background:#111;border:1px solid #222;padding:6px 10px;border-radius:6px;font-size:12px" title="Auto-close voting at this time">
+      <button class="btn-sm" style="white-space:nowrap" onclick="setVotingEndsAt()">Set End Time</button>
+      <button class="btn-sm" style="color:#ff4444;border-color:#3a1a1a;white-space:nowrap" onclick="resetVotes()">Reset All Votes</button>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" onclick="showTab('participants')">Approved</div>
+      <div class="tab" onclick="showTab('pending')">Pending <span id="pending-count" style="background:#ff4444;color:#fff;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px;display:none"></span></div>
+      <div class="tab" onclick="showTab('results')">Results</div>
+      <div class="tab" onclick="showTab('optins')">Email Opt-ins</div>
+    </div>
+
+    <div id="tab-participants">
+      <div class="card" style="margin-bottom:16px">
+        <p class="section-title" style="margin-bottom:12px">Add Participant</p>
+        <div class="two-col">
+          <input type="text" id="p-name" placeholder="Name">
+          <input type="text" id="p-slug" placeholder="URL slug (e.g. booth-one)">
+        </div>
+        <textarea id="p-desc" placeholder="Description (optional)"></textarea>
+        <div style="display:flex;gap:10px;align-items:flex-start;margin-bottom:10px">
+          <div style="flex:1">
+            <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em;display:block;margin-bottom:6px">Image</label>
+            <label style="display:flex;align-items:center;gap:8px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 14px;cursor:pointer;color:#888;font-size:13px" id="img-label">
+              <span>📷</span><span id="img-label-text">Upload photo or paste URL below</span>
+              <input type="file" id="p-img-file" accept="image/*" style="display:none;margin:0" onchange="handleImageFile(this)">
+            </label>
+            <input type="text" id="p-img" placeholder="…or paste image URL" style="margin-top:6px">
+          </div>
+          <img id="p-img-preview" src="" alt="" style="display:none;width:72px;height:72px;border-radius:8px;object-fit:cover;flex-shrink:0;margin-top:22px">
+        </div>
+        <input type="text" id="p-instagram" placeholder="Instagram handle (optional)" style="margin-bottom:10px">
+        <button class="btn" onclick="addParticipant()">Add Participant</button>
+        <div id="p-msg" style="font-size:13px;color:#4caf50;margin-top:8px;min-height:20px"></div>
+      </div>
+      <div class="card" id="participants-list">
+        <p style="color:#444;font-size:14px">Loading...</p>
+      </div>
+    </div>
+
+    <div id="tab-pending" style="display:none">
+      <div class="card" id="pending-list">
+        <p style="color:#444;font-size:14px">Loading...</p>
+      </div>
+    </div>
+
+    <div id="tab-results" style="display:none">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+          <p class="section-title" style="margin:0">Live Leaderboard</p>
+          <div style="display:flex;align-items:center;gap:10px">
+            <span id="refresh-indicator" style="font-size:11px;color:#444">Auto-refreshing</span>
+            <button class="btn-sm" onclick="exportCSV()">Export CSV</button>
+          </div>
+        </div>
+        <p style="font-size:11px;color:#333;margin-bottom:20px">Updates every 30 seconds</p>
+        <div id="results-podium" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:24px"></div>
+        <div id="results-leaderboard"></div>
+      </div>
+    </div>
+
+    <div id="tab-optins" style="display:none">
+      <div class="card">
+        <p class="section-title" style="margin-bottom:16px">Email Opt-ins</p>
+        <table>
+          <thead>
+            <tr><th>Email</th><th>Date</th></tr>
+          </thead>
+          <tbody id="optins-tbody">
+            <tr><td colspan="2" style="color:#444;padding:20px">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Edit Participant Modal -->
+<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;align-items:center;justify-content:center;padding:24px">
+  <div style="background:#111;border:1px solid #222;border-radius:16px;padding:28px;width:100%;max-width:480px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <p style="font-size:16px;font-weight:700">Edit Booth</p>
+      <button onclick="closeEditModal()" style="background:none;border:none;color:#555;font-size:20px;cursor:pointer;line-height:1">✕</button>
+    </div>
+    <input type="hidden" id="edit-id">
+    <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em">Name</label>
+    <input type="text" id="edit-name" style="margin-top:6px">
+    <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em">URL Slug</label>
+    <input type="text" id="edit-slug" style="margin-top:6px">
+    <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em">Description</label>
+    <textarea id="edit-desc" style="margin-top:6px"></textarea>
+    <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em">Instagram Handle</label>
+    <input type="text" id="edit-instagram" placeholder="@yourbooth" style="margin-top:6px">
+    <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em;margin-top:12px">Booth Song (Spotify link)</label>
+    <input type="url" id="edit-booth-song" placeholder="https://open.spotify.com/track/..." style="margin-top:6px">
+    <label style="font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.06em">Image</label>
+    <div style="display:flex;gap:10px;align-items:flex-start;margin-top:6px">
+      <div style="flex:1">
+        <label style="display:flex;align-items:center;gap:8px;background:#1a1a1a;border:1px solid #2a2a2a;border-radius:8px;padding:10px 14px;cursor:pointer;color:#888;font-size:13px">
+          <span>📷</span><span id="edit-img-label-text">Upload new photo</span>
+          <input type="file" id="edit-img-file" accept="image/*" style="display:none;margin:0" onchange="handleEditImageFile(this)">
+        </label>
+        <input type="text" id="edit-img-url" placeholder="…or paste image URL" style="margin-top:6px">
+      </div>
+      <img id="edit-img-preview" src="" alt="" style="display:none;width:72px;height:72px;border-radius:8px;object-fit:cover;flex-shrink:0">
+    </div>
+    <div style="display:flex;gap:10px;margin-top:20px">
+      <button class="btn" style="flex:1" onclick="saveParticipant()">Save Changes</button>
+      <button class="btn-sm" onclick="closeEditModal()">Cancel</button>
+    </div>
+    <div id="edit-msg" style="font-size:13px;color:#4caf50;margin-top:10px;min-height:18px"></div>
+  </div>
+</div>
+
+<script>
+let token = localStorage.getItem('sg_act_token');
+if (!token) { window.location.href = '/activations-login'; }
+
+let currentActivation = null;
+let currentResults = [];
+
+async function api(path, method='GET', body=null) {
+  const opts = { method, headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' } };
+  if (body) opts.body = JSON.stringify(body);
+  const res = await fetch(path, opts);
+  if (res.status === 401) { window.location.href = '/activations-login'; return; }
+  return res.json();
+}
+
+async function loadActivations() {
+  const activations = await api('/activations/admin/activations/data');
+  const el = document.getElementById('activations-list');
+  if (!activations || !activations.length) {
+    el.innerHTML = '<p style="color:#444;font-size:14px">No activations yet.</p>';
+    return;
+  }
+  el.innerHTML = activations.map(a => `
+    <div class="activation-row">
+      <div>
+        <div class="activation-name">${a.name}</div>
+        <div class="activation-slug">/activations/${a.slug}</div>
+      </div>
+      <div class="actions">
+        <button class="btn-sm" onclick="openActivation(${a.id}, '${a.name}', '${a.slug}', '${a.voting_ends_at || ''}')">Manage</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function createActivation() {
+  const name = document.getElementById('new-name').value.trim();
+  const slug = document.getElementById('new-slug').value.trim();
+  const description = document.getElementById('new-desc').value.trim();
+  if (!name || !slug) return;
+  const result = await api('/activations/admin/activations/create', 'POST', { name, slug, description });
+  document.getElementById('msg').textContent = result.error || 'Created.';
+  document.getElementById('new-name').value = '';
+  document.getElementById('new-slug').value = '';
+  document.getElementById('new-desc').value = '';
+  loadActivations();
+}
+
+function openActivation(id, name, slug, voting_ends_at) {
+  currentActivation = { id, name, slug };
+  document.getElementById('list-view').style.display = 'none';
+  document.getElementById('detail-view').style.display = 'block';
+  document.getElementById('detail-title').textContent = name;
+  document.getElementById('detail-url').textContent = window.location.origin + '/activations/' + slug;
+  document.getElementById('master-qr-link').href = '/activations/' + slug + '/qr';
+  document.getElementById('winner-page-link').href = '/activations/' + slug + '/winner';
+  const endsInput = document.getElementById('voting-ends-input');
+  endsInput.value = voting_ends_at ? new Date(voting_ends_at).toISOString().slice(0,16) : '';
+  loadParticipants();
+}
+
+function showList() {
+  document.getElementById('list-view').style.display = 'block';
+  document.getElementById('detail-view').style.display = 'none';
+  loadActivations();
+}
+
+function showTab(tab) {
+  ['participants','pending','results','optins'].forEach(t => {
+    document.getElementById('tab-' + t).style.display = t === tab ? 'block' : 'none';
+  });
+  document.querySelectorAll('.tab').forEach((el, i) => {
+    el.classList.toggle('active', ['participants','pending','results','optins'][i] === tab);
+  });
+  if (tab === 'results') { loadResults(); startResultsRefresh(); } else { stopResultsRefresh(); }
+  if (tab === 'optins') loadOptins();
+  if (tab === 'pending') loadPending();
+}
+
+async function loadPending() {
+  const pending = await api(`/activations/admin/activations/${currentActivation.id}/pending`);
+  const el = document.getElementById('pending-list');
+  const countEl = document.getElementById('pending-count');
+  if (!pending || !pending.length) {
+    el.innerHTML = '<p style="color:#444;font-size:14px">No pending submissions.</p>';
+    countEl.style.display = 'none';
+    return;
+  }
+  countEl.textContent = pending.length;
+  countEl.style.display = 'inline';
+  el.innerHTML = pending.map(p => `
+    <div class="participant-row">
+      ${p.image_url ? `<img src="${p.image_url}" alt="${p.name}" style="width:64px;height:64px;border-radius:8px;object-fit:cover">` : `<div class="p-avatar" style="width:64px;height:64px">${p.name[0]}</div>`}
+      <div class="participant-info" style="flex:1">
+        <div class="name">${p.name}</div>
+        ${p.description ? `<div style="font-size:12px;color:#666;margin-top:2px">${p.description}</div>` : ''}
+        ${p.contact_email ? `<div style="font-size:11px;color:#444;margin-top:2px">${p.contact_email}</div>` : ''}
+      </div>
+      <div style="display:flex;gap:8px">
+        <button class="btn-sm" style="color:#4caf50;border-color:#1a3a1a" onclick="approveParticipant(${p.id})">Approve</button>
+        <button class="btn-danger" onclick="rejectParticipant(${p.id})">Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function approveParticipant(id) {
+  await api(`/activations/admin/activations/participants/${id}/approve`, 'POST');
+  loadPending();
+  loadParticipants();
+}
+
+async function rejectParticipant(id) {
+  await api(`/activations/admin/activations/participants/${id}/reject`, 'POST');
+  loadPending();
+}
+
+async function loadParticipants() {
+  const participants = await api(`/activations/admin/activations/${currentActivation.id}/participants`);
+  const el = document.getElementById('participants-list');
+  if (!participants || !participants.length) {
+    el.innerHTML = '<p style="color:#444;font-size:14px">No participants yet.</p>';
+    return;
+  }
+  el.innerHTML = participants.map(p => `
+    <div class="participant-row" id="prow-${p.id}">
+      ${p.image_url ? `<img src="${p.image_url}" alt="${p.name}">` : `<div class="p-avatar">${p.name[0]}</div>`}
+      <div class="participant-info">
+        <div class="name">${p.name}</div>
+        <div class="slug">/activations/${currentActivation.slug}/${p.slug}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn-sm" onclick="copyUrl('${window.location.origin}/activations/${currentActivation.slug}/${p.slug}')">Copy Vote URL</button>
+        <a class="btn-sm" href="/activations/${currentActivation.slug}/${p.slug}/profile" target="_blank" style="text-decoration:none">QR Profile</a>
+        <button class="btn-sm" onclick="openEditModal(${JSON.stringify(p).replace(/"/g,'&quot;')})">Edit</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function handleImageFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('img-label-text').textContent = file.name;
+  document.getElementById('p-img').value = '';
+  const preview = document.getElementById('p-img-preview');
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = 'block';
+}
+
+async function addParticipant() {
+  const name = document.getElementById('p-name').value.trim();
+  const slug = document.getElementById('p-slug').value.trim();
+  const description = document.getElementById('p-desc').value.trim();
+  const image_url = document.getElementById('p-img').value.trim();
+  const instagram_handle = document.getElementById('p-instagram').value.trim().replace(/^@/, '');
+  const fileInput = document.getElementById('p-img-file');
+  if (!name || !slug) return;
+
+  const msgEl = document.getElementById('p-msg');
+  msgEl.textContent = 'Saving...';
+
+  let result;
+  if (fileInput.files[0]) {
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('slug', slug);
+    fd.append('description', description);
+    fd.append('image', fileInput.files[0]);
+    if (instagram_handle) fd.append('instagram_handle', instagram_handle);
+    const res = await fetch(`/activations/admin/activations/${currentActivation.id}/participants`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: fd
+    });
+    if (res.status === 401) { window.location.href = '/activations-login'; return; }
+    result = await res.json();
+  } else {
+    result = await api(`/activations/admin/activations/${currentActivation.id}/participants`, 'POST', { name, slug, description, image_url, instagram_handle });
+  }
+
+  msgEl.textContent = result.error || 'Added.';
+  document.getElementById('p-name').value = '';
+  document.getElementById('p-slug').value = '';
+  document.getElementById('p-desc').value = '';
+  document.getElementById('p-img').value = '';
+  document.getElementById('p-instagram').value = '';
+  fileInput.value = '';
+  document.getElementById('img-label-text').textContent = 'Upload photo or paste URL below';
+  document.getElementById('p-img-preview').style.display = 'none';
+  loadParticipants();
+}
+
+let resultsRefreshTimer = null;
+
+async function loadResults() {
+  const data = await api(`/activations/admin/activations/${currentActivation.id}/results`);
+  currentResults = data.results || [];
+  const el = document.getElementById('results-leaderboard');
+  if (!currentResults.length) {
+    el.innerHTML = '<p style="color:#444;font-size:14px;padding:12px 0">No votes yet.</p>';
+    return;
+  }
+
+  const sorted = [...currentResults].sort((a, b) => parseInt(b.total) - parseInt(a.total));
+  const maxTotal = parseInt(sorted[0]?.total) || 1;
+
+  // Podium — top 3
+  const podiumColors = ['#1CC5BE', '#888', '#a0785a'];
+  const podiumLabels = ['🏆 1st', '🥈 2nd', '🥉 3rd'];
+  const podiumEl = document.getElementById('results-podium');
+  podiumEl.innerHTML = sorted.slice(0, 3).map((r, i) => `
+    <div style="background:#111;border:1px solid ${podiumColors[i]}33;border-radius:12px;padding:14px;text-align:center">
+      <div style="font-size:11px;color:${podiumColors[i]};font-weight:700;letter-spacing:.06em;margin-bottom:6px">${podiumLabels[i]}</div>
+      <div style="font-size:13px;font-weight:700;margin-bottom:8px;line-height:1.3">${r.name}</div>
+      <div style="font-size:28px;font-weight:800;color:${podiumColors[i]}">${r.total}</div>
+      <div style="font-size:10px;color:#444;margin-top:2px">votes</div>
+    </div>
+  `).join('');
+
+  const medals = ['🏆', '🥈', '🥉'];
+
+  el.innerHTML = sorted.map((r, i) => {
+    const rulesP = maxTotal ? Math.round((r.rules / maxTotal) * 100) : 0;
+    const hellP  = maxTotal ? Math.round((r.hell_yeah / maxTotal) * 100) : 0;
+    const noP    = maxTotal ? Math.round((r.no_thanks / maxTotal) * 100) : 0;
+    const medal  = i < 3 ? medals[i] : `#${i + 1}`;
+    return `
+    <div style="padding:16px 0;border-bottom:1px solid #1a1a1a">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="font-size:18px;min-width:28px">${medal}</span>
+          <span style="font-size:15px;font-weight:700">${r.name}</span>
+        </div>
+        <span style="font-size:18px;font-weight:700;color:#1CC5BE">${r.total}</span>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#555;margin-bottom:3px"><span>🔥 This Booth Rules</span><span>${r.rules}</span></div>
+          <div style="background:#1a1a1a;border-radius:4px;height:6px"><div style="background:#1CC5BE;height:6px;border-radius:4px;width:${rulesP}%;transition:width .4s"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#555;margin-bottom:3px"><span>🤘 Hell Yeah</span><span>${r.hell_yeah}</span></div>
+          <div style="background:#1a1a1a;border-radius:4px;height:6px"><div style="background:#555;height:6px;border-radius:4px;width:${hellP}%;transition:width .4s"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:11px;color:#555;margin-bottom:3px"><span>😬 Not My Vibe</span><span>${r.no_thanks}</span></div>
+          <div style="background:#1a1a1a;border-radius:4px;height:6px"><div style="background:#333;height:6px;border-radius:4px;width:${noP}%;transition:width .4s"></div></div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('refresh-indicator').textContent = `Updated ${new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}`;
+}
+
+function startResultsRefresh() {
+  stopResultsRefresh();
+  resultsRefreshTimer = setInterval(loadResults, 30000);
+}
+
+function stopResultsRefresh() {
+  if (resultsRefreshTimer) { clearInterval(resultsRefreshTimer); resultsRefreshTimer = null; }
+}
+
+async function loadOptins() {
+  const data = await api(`/activations/admin/activations/${currentActivation.id}/results`);
+  const optins = data.optins || [];
+  const tbody = document.getElementById('optins-tbody');
+  if (!optins.length) {
+    tbody.innerHTML = '<tr><td colspan="2" style="color:#444;padding:20px">No opt-ins yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = optins.map(o => `
+    <tr>
+      <td style="font-family:monospace">${o.email || o.phone || '—'}</td>
+      <td style="color:#666;font-size:12px">${new Date(o.created_at).toLocaleDateString()}</td>
+    </tr>
+  `).join('');
+}
+
+function copyUrl(url) {
+  navigator.clipboard.writeText(url);
+}
+
+function exportCSV() {
+  if (!currentResults.length) return;
+  const rows = [['Participant','This Booth Rules','Hell Yeah','No Thanks','Total']];
+  currentResults.forEach(r => rows.push([r.name, r.rules, r.hell_yeah, r.no_thanks, r.total]));
+  const csv = rows.map(r => r.map(v => `"${v}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = `${currentActivation.slug}-results.csv`; a.click();
+}
+
+async function closeVoting() {
+  if (!confirm('End voting now and announce the winner? This cannot be undone.')) return;
+  const btn = document.getElementById('close-voting-btn');
+  btn.disabled = true;
+  btn.textContent = 'Closing...';
+  const result = await api(`/activations/admin/activations/${currentActivation.id}/close-voting`, 'POST');
+  if (result.error) { alert(result.error); btn.disabled = false; btn.textContent = 'End Voting Now'; return; }
+  btn.textContent = 'Voting Closed';
+  btn.style.color = '#555';
+  btn.style.borderColor = '#222';
+  alert('Voting is closed. Share the winner page with your audience!');
+  window.open('/activations/' + currentActivation.slug + '/winner', '_blank');
+}
+
+async function resetVotes() {
+  if (!confirm('Delete ALL votes for ' + currentActivation.name + '? This wipes the leaderboard and cannot be undone.')) return;
+  if (!confirm('Are you sure? Every vote will be permanently deleted.')) return;
+  const result = await api(`/activations/admin/activations/${currentActivation.id}/reset-votes`, 'POST');
+  if (result.error) return alert(result.error);
+  alert(result.deleted + ' votes deleted. The contest starts fresh.');
+  loadParticipants();
+}
+
+async function setVotingEndsAt() {
+  const val = document.getElementById('voting-ends-input').value;
+  if (!val) return alert('Pick a date and time first.');
+  const voting_ends_at = new Date(val).toISOString();
+  const result = await api(`/activations/admin/activations/${currentActivation.id}/set-voting-ends`, 'POST', { voting_ends_at });
+  if (result.error) return alert(result.error);
+  const fmt = new Date(val).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  alert(`Voting will auto-close at ${fmt}.`);
+}
+
+function openEditModal(p) {
+  document.getElementById('edit-id').value = p.id;
+  document.getElementById('edit-name').value = p.name || '';
+  document.getElementById('edit-slug').value = p.slug || '';
+  document.getElementById('edit-desc').value = p.description || '';
+  document.getElementById('edit-img-url').value = p.image_url || '';
+  document.getElementById('edit-instagram').value = p.instagram_handle || '';
+  document.getElementById('edit-booth-song').value = p.booth_song_url || '';
+  document.getElementById('edit-img-label-text').textContent = 'Upload new photo';
+  document.getElementById('edit-img-file').value = '';
+  document.getElementById('edit-msg').textContent = '';
+  const preview = document.getElementById('edit-img-preview');
+  if (p.image_url) { preview.src = p.image_url; preview.style.display = 'block'; }
+  else { preview.style.display = 'none'; }
+  document.getElementById('edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() {
+  document.getElementById('edit-modal').style.display = 'none';
+}
+
+function handleEditImageFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+  document.getElementById('edit-img-label-text').textContent = file.name;
+  document.getElementById('edit-img-url').value = '';
+  const preview = document.getElementById('edit-img-preview');
+  preview.src = URL.createObjectURL(file);
+  preview.style.display = 'block';
+}
+
+async function saveParticipant() {
+  const id = document.getElementById('edit-id').value;
+  const name = document.getElementById('edit-name').value.trim();
+  const slug = document.getElementById('edit-slug').value.trim();
+  const description = document.getElementById('edit-desc').value.trim();
+  const image_url = document.getElementById('edit-img-url').value.trim();
+  const instagram_handle = document.getElementById('edit-instagram').value.trim().replace(/^@/, '');
+  const booth_song_url = document.getElementById('edit-booth-song').value.trim() || null;
+  const fileInput = document.getElementById('edit-img-file');
+  const msgEl = document.getElementById('edit-msg');
+  msgEl.textContent = 'Saving...';
+
+  let result;
+  if (fileInput.files[0]) {
+    const fd = new FormData();
+    fd.append('name', name); fd.append('slug', slug); fd.append('description', description);
+    fd.append('instagram_handle', instagram_handle);
+    if (booth_song_url) fd.append('booth_song_url', booth_song_url);
+    fd.append('image', fileInput.files[0]);
+    const res = await fetch(`/activations/admin/activations/participants/${id}`, {
+      method: 'PUT', headers: { Authorization: `Bearer ${token}` }, body: fd
+    });
+    if (res.status === 401) { window.location.href = '/activations-login'; return; }
+    result = await res.json();
+  } else {
+    result = await api(`/activations/admin/activations/participants/${id}`, 'PUT', { name, slug, description, image_url, instagram_handle, booth_song_url });
+  }
+
+  if (result.error) { msgEl.textContent = result.error; return; }
+  msgEl.textContent = 'Saved.';
+  setTimeout(closeEditModal, 800);
+  loadParticipants();
+}
+
+loadActivations();
+</script>
+</body>
+</html>

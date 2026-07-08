@@ -1,0 +1,23 @@
+{
+  "name": "silver-glider-activations",
+  "version": "1.0.0",
+  "description": "Festival booth voting platform — register a booth, get a QR code, attendees scan and vote.",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "type": "commonjs",
+  "license": "ISC",
+  "dependencies": {
+    "cloudinary": "^2.10.0",
+    "dotenv": "^17.3.1",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "multer": "^2.2.0",
+    "pg": "^8.20.0",
+    "qrcode": "^1.5.4",
+    "resend": "^6.9.4"
+  }
+}
