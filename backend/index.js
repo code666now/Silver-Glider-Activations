@@ -31,14 +31,14 @@ async function start() {
 
   const app = express();
   app.use(express.json());
-  app.use(express.static(path.join(__dirname, '../public')));
+  app.use(express.static(path.join(__dirname, '../frontend/public')));
 
   // Requiring the router also triggers db/activationsDB.js runMigrations() (idempotent ALTERs),
   // which is why it comes after the base CREATE TABLE migrations above.
   app.use('/activations', require('./routes/activations'));
 
   app.get('/activations-login', (req, res) =>
-    res.sendFile(path.resolve(__dirname, 'views', 'activations-login.html')));
+    res.sendFile(path.resolve(__dirname, '../frontend/views', 'activations-login.html')));
 
   app.get('/unsubscribe', async (req, res) => {
     const { email } = req.query;

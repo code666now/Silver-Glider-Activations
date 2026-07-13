@@ -1,5 +1,5 @@
 -- Silver Glider Activations — full schema (booth voting platform).
--- Idempotent: CREATE TABLE IF NOT EXISTS. Runs on every startup (see src/index.js).
+-- Idempotent: CREATE TABLE IF NOT EXISTS. Runs on every startup (see backend/index.js).
 -- Consolidates the tables plus every column the app writes to (in the original repo
 -- some of these were added at runtime with ALTER TABLE; here they are declared upfront).
 

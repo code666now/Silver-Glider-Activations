@@ -1,11 +1,7 @@
 const { Resend } = require('resend');
+const { frontendUrl: baseUrl } = require('./urls');
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
-
-function baseUrl() {
-  return process.env.RAILWAY_BASE_URL
-    || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '');
-}
 
 async function sendBoothConfirmation({ to, boothName, activationName, profileUrl }) {
   if (!resend) return;

@@ -2,10 +2,10 @@
   "name": "silver-glider-activations",
   "version": "1.0.0",
   "description": "Festival booth voting platform — register a booth, get a QR code, attendees scan and vote.",
-  "main": "src/index.js",
+  "main": "backend/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "node backend/index.js",
+    "dev": "node --watch backend/index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "type": "commonjs",

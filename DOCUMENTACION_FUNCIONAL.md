@@ -24,7 +24,7 @@
 | **Uploads** | `multer` (memoria, límite 10 MB) |
 | **Puerto** | `process.env.PORT || 3000` |
 | **Prefijo API** | `/activations` (+ rutas de ops sin prefijo) |
-| **Arranque** | `npm start` → `node src/index.js` · `npm run dev` (watch) |
+| **Arranque** | `npm start` → `node backend/index.js` · `npm run dev` (watch) |
 | **Migraciones** | Automáticas al arranque (idempotentes) |
 | **Prefijo de tablas** | `sg_` (`sg_activations`, `sg_participants`, `sg_activation_votes`, `sg_activation_optins`) |
 
@@ -49,19 +49,19 @@ Request → index.js → Router (routes/activations.js) → DB layer (db/activat
 
 Las páginas de cara al público (landing, votación, perfil, ganador, QR) se **renderizan como
 HTML en el servidor** desde funciones dentro de `routes/activations.js` (no hay framework de
-frontend). Las vistas de admin son archivos estáticos en `src/views/`.
+frontend). Las vistas de admin son archivos estáticos en `frontend/views/`.
 
 ---
 
-## 2. Punto de entrada (`src/index.js`)
+## 2. Punto de entrada (`backend/index.js`)
 
 Flujo de arranque:
 
 1. Carga variables de entorno (`dotenv`).
-2. **Ejecuta migraciones** (`runBaseMigrations`): lee y aplica los `.sql` de `src/migrations/`
+2. **Ejecuta migraciones** (`runBaseMigrations`): lee y aplica los `.sql` de `backend/migrations/`
    en orden. Idempotente (`CREATE TABLE IF NOT EXISTS`). Se ejecuta **antes** de montar las rutas.
 3. `express.json()` — parser JSON.
-4. Sirve estáticos desde `/public` (fondos, logo).
+4. Sirve estáticos desde `frontend/public` en la raíz del sitio (fondos, logo).
 5. Monta el router de votación en `/activations`.
 6. Sirve rutas de operación:
    - `GET /activations-login` → panel de login de admin (HTML).
@@ -77,7 +77,7 @@ Flujo de arranque:
 
 ## 3. Modelo de datos
 
-Definido en [src/migrations/001_activations.sql](src/migrations/001_activations.sql). Prefijo `sg_`.
+Definido en [backend/migrations/001_activations.sql](backend/migrations/001_activations.sql). Prefijo `sg_`.
 
 ### `sg_activations` — la activación / concurso
 | Campo | Tipo | Notas |
@@ -141,7 +141,7 @@ No hay ninguna FK hacia las tablas del ticketing.
 
 ## 4. Autenticación y autorización
 
-### Admin — [src/middleware/auth.js](src/middleware/auth.js)
+### Admin — [backend/middleware/auth.js](backend/middleware/auth.js)
 - `POST /activations/admin/login`: valida `password` contra `ACTIVATIONS_ADMIN_PASS`, firma un JWT
   `{ role: 'activations_admin' }` con `ACTIVATIONS_ADMIN_SECRET`, `expiresIn: '7d'`.
 - `requireActivationsAdmin`: lee `Authorization: Bearer <token>`, verifica firma y exige
@@ -195,13 +195,14 @@ UNIQUE de la BD, no el cliente.
 ### 5.3 Perfil de stand y códigos QR
 - `GET /activations/:slug/:booth/profile` → **página del vendedor** con su QR (para imprimir/guardar).
 - `GET /activations/:slug/qr` → **Master QR** de la activación (para la entrada del festival).
-- Ambos QR se generan en caliente con `qrcode`, codificando la URL basada en `RAILWAY_BASE_URL`.
+- Ambos QR se generan en caliente con `qrcode`, codificando la URL del frontend (helper
+  `frontendUrl()` en [backend/lib/urls.js](backend/lib/urls.js): `FRONTEND_URL` → `RAILWAY_BASE_URL` → `RAILWAY_PUBLIC_DOMAIN`).
 
 ### 5.4 Ganador
 - `GET /activations/:slug/winner` → página del ganador. El ganador se calcula por **votos
   positivos únicamente** (`getWinner`: `COUNT ... FILTER (WHERE vote IN ('rules','hell_yeah'))`).
 
-### 5.5 Panel de administración — [src/views/activations-admin.html](src/views/activations-admin.html)
+### 5.5 Panel de administración — [frontend/views/activations-admin.html](frontend/views/activations-admin.html)
 Login en `GET /activations-login`; panel en `GET /activations/admin/activations`. Endpoints:
 
 | Endpoint | Acción |
@@ -264,9 +265,9 @@ Los rate limiters son **en memoria** (se reinician al reiniciar el proceso) y ba
 | **Resend** | Emails (confirmación de stand, aviso al admin, welcome) | `RESEND_API_KEY`, `RESEND_FROM` |
 | **qrcode** | Generación de QR (in-process) | — |
 | **JWT** | Auth de admin | `ACTIVATIONS_ADMIN_SECRET`, `ACTIVATIONS_ADMIN_PASS` |
-| **URL pública** | Construcción de URLs de QR y enlaces de email | `RAILWAY_BASE_URL`, `RAILWAY_PUBLIC_DOMAIN` |
+| **URL pública** | Construcción de URLs de QR y enlaces de email (helper `frontendUrl()`) | `FRONTEND_URL`, `RAILWAY_BASE_URL`, `RAILWAY_PUBLIC_DOMAIN` |
 
-Emails (en [src/lib/mailer.js](src/lib/mailer.js)):
+Emails (en [backend/lib/mailer.js](backend/lib/mailer.js)):
 
 | Función | Disparador | Destinatario |
 |---|---|---|
@@ -314,14 +315,14 @@ Emails (en [src/lib/mailer.js](src/lib/mailer.js)):
 
 1. Apuntar el servicio Railway a este repositorio.
 2. Configurar las variables de entorno (ver [.env.example](.env.example)); asegurar
-   `RESEND_API_KEY`, `RESEND_FROM`, `RAILWAY_BASE_URL`, `RAILWAY_PUBLIC_DOMAIN`.
+   `RESEND_API_KEY`, `RESEND_FROM`, `FRONTEND_URL` (`RAILWAY_BASE_URL` / `RAILWAY_PUBLIC_DOMAIN` como fallback).
 3. Añadir dominio propio (`activations.silverglidertickets.com`) y actualizar
-   `RAILWAY_BASE_URL` / `RAILWAY_PUBLIC_DOMAIN`.
+   `FRONTEND_URL` (y `RAILWAY_BASE_URL` / `RAILWAY_PUBLIC_DOMAIN` si se usan como fallback).
 4. Verificar `GET /health` → `{ status: "ok" }`.
 5. Ajustar la RAM del contenedor a ≥ 1 GB antes del día del evento.
 
 > ⚠️ **Regla crítica de secuencia:** los QR codifican la URL. **No imprimir QRs** hasta que el
-> dominio final esté activo y `RAILWAY_BASE_URL` apunte a él, o los códigos quedarán muertos.
+> dominio final esté activo y `FRONTEND_URL` apunte a él, o los códigos quedarán muertos.
 
 **Checklist previo al evento:** registrar un stand de prueba, confirmar que aparece en la landing,
 votar, revisar el panel admin, probar opt-in, cargar un QR y escanearlo, confirmar el email de confirmación.

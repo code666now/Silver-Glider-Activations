@@ -18,14 +18,14 @@ npm run dev            # or: npm start
 ```
 
 The server creates/updates its tables on startup (idempotent migrations in
-`src/migrations/`), then listens on `PORT` (default 3000).
+`backend/migrations/`), then listens on `PORT` (default 3000).
 
 Health check: `GET /health` → `{ "status": "ok", "sha": "..." }`
 
 ## Structure
 
 ```
-src/
+backend/
   index.js              App entry: migrations, static, routes, /health, /unsubscribe
   config/db.js          pg Pool (DATABASE_URL)
   middleware/
@@ -39,10 +39,11 @@ src/
     mailer.js           Resend emails: booth confirmation, admin notify, welcome
   migrations/
     001_activations.sql Full schema (CREATE TABLE IF NOT EXISTS ...)
-  views/
+frontend/
+  views/                Admin HTML pages (served by backend)
     activations-login.html
     activations-admin.html
-public/                 Backgrounds + logo (served at site root)
+  public/               Backgrounds + logo (served at site root)
 ```
 
 ## Key routes

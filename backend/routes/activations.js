@@ -8,6 +8,7 @@ const multer = require('multer');
 const { uploadImage } = require('../lib/cloudinary');
 const QRCode = require('qrcode');
 const { sendBoothConfirmation, sendWelcomeEmail, sendAdminBoothNotification } = require('../lib/mailer');
+const { frontendUrl } = require('../lib/urls');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Auto-close activations whose voting_ends_at has passed — runs every 60 seconds
@@ -74,7 +75,7 @@ router.post('/admin/login', async (req, res) => {
 });
 
 router.get('/admin/activations', (req, res) => {
-  res.sendFile(path.resolve(__dirname, '../views/activations-admin.html'));
+  res.sendFile(path.resolve(__dirname, '../../frontend/views/activations-admin.html'));
 });
 
 router.get('/admin/activations/data', requireActivationsAdmin, async (req, res) => {
@@ -209,8 +210,7 @@ router.post('/:activationSlug/join', upload.single('image'), async (req, res) =>
       status: 'approved', contact_email, contact_phone, instagram_handle, booth_song_url: booth_song_url || null
     });
     if (contact_email) {
-      const baseUrl = process.env.RAILWAY_BASE_URL
-        || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '');
+      const baseUrl = frontendUrl();
       const profileUrl = `${baseUrl}/activations/${activation.slug}/${slug}/profile`;
       sendBoothConfirmation({ to: contact_email, boothName: name, activationName: activation.name, profileUrl }).catch(() => {});
       sendAdminBoothNotification({ boothName: name, activationName: activation.name, contactEmail: contact_email, contactPhone: contact_phone, instagramHandle: instagram_handle, profileUrl }).catch(() => {});
@@ -280,8 +280,7 @@ router.get('/:activationSlug/winner', async (req, res) => {
 router.get('/:activationSlug/qr', async (req, res) => {
   const activation = await db.getActivationBySlug(req.params.activationSlug);
   if (!activation) return res.status(404).send('Not found');
-  const baseUrl = process.env.RAILWAY_BASE_URL
-    || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '');
+  const baseUrl = frontendUrl();
   const landingUrl = `${baseUrl}/activations/${activation.slug}`;
   const qrDataUrl = await QRCode.toDataURL(landingUrl, { width: 320, margin: 2, color: { dark: '#0a0a0a', light: '#f5f0eb' } });
   res.send(renderMasterQRPage(activation, landingUrl, qrDataUrl));
@@ -308,8 +307,7 @@ router.get('/:activationSlug/:participantSlug/profile', async (req, res) => {
   if (!activation) return res.status(404).send('Not found');
   const participant = await db.getParticipantBySlug(activation.id, req.params.participantSlug);
   if (!participant) return res.status(404).send('Not found');
-  const baseUrl = process.env.RAILWAY_BASE_URL
-    || (process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : '');
+  const baseUrl = frontendUrl();
   const voteUrl = `${baseUrl}/activations/${activation.slug}/${participant.slug}`;
   const qrDataUrl = await QRCode.toDataURL(voteUrl, { width: 280, margin: 2, color: { dark: '#0a0a0a', light: '#f5f0eb' } });
   res.send(renderProfilePage(activation, participant, voteUrl, qrDataUrl));
@@ -1091,7 +1089,7 @@ const fp = getFingerprint();
 }
 
 function renderWinnerPage(activation, winner) {
-  const winnerUrl = `${process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : ''}/activations/${activation.slug}/winner`;
+  const winnerUrl = `${frontendUrl()}/activations/${activation.slug}/winner`;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
