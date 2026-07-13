@@ -1,0 +1,49 @@
+# Netlify — Silver Glider Activations (frontend estático + proxy al backend en Railway)
+#
+# Este proyecto NO tiene build de frontend (no es Next.js). Netlify solo:
+#   1. Publica los assets estáticos (imágenes/logo) desde su CDN.
+#   2. Reenvía (proxy, status 200) todas las rutas dinámicas al backend Express
+#      en Railway, para que los fetch con rutas relativas de los HTML sigan
+#      funcionando bajo el mismo dominio de Netlify.
+#
+# 👉 ANTES DE DESPLEGAR: reemplaza TU-BACKEND.up.railway.app por la URL real
+#    del servicio backend en Railway (sin barra final).
+
+[build]
+  # Los assets públicos (logo.png, *-bg.jpg) quedan servidos en la raíz del sitio,
+  # igual que los referencian las páginas (/logo.png, /landing-bg.jpg).
+  publish = "frontend/public"
+  # No hay build de frontend: comando vacío.
+  command = ""
+
+# --- Proxy al backend Express (Railway) ---
+# El orden importa: Netlify sirve primero un archivo estático si existe;
+# si no, aplica el primer redirect que haga match.
+
+# API + páginas renderizadas por el backend (landing, votación, perfil, ganador, QR, admin)
+[[redirects]]
+  from = "/activations/*"
+  to = "https://activations.silverglidertickets.com/activations/:splat"
+  status = 200
+  force = true
+
+# Panel de login de admin (servido por el backend)
+[[redirects]]
+  from = "/activations-login"
+  to = "https://activations.silverglidertickets.com/activations-login"
+  status = 200
+  force = true
+
+# Baja de la lista de emails
+[[redirects]]
+  from = "/unsubscribe"
+  to = "https://activations.silverglidertickets.com/unsubscribe"
+  status = 200
+  force = true
+
+# Health check
+[[redirects]]
+  from = "/health"
+  to = "https://activations.silverglidertickets.com/health"
+  status = 200
+  force = true
