@@ -6,7 +6,7 @@
 #      en Railway, para que los fetch con rutas relativas de los HTML sigan
 #      funcionando bajo el mismo dominio de Netlify.
 #
-# 👉 ANTES DE DESPLEGAR: reemplaza TU-BACKEND.up.railway.app por la URL real
+# 👉 ANTES DE DESPLEGAR: reemplaza silver-glider-tickets-production-e4a0.up.railway.app por la URL real
 #    del servicio backend en Railway (sin barra final).
 
 [build]
@@ -23,27 +23,27 @@
 # API + páginas renderizadas por el backend (landing, votación, perfil, ganador, QR, admin)
 [[redirects]]
   from = "/activations/*"
-  to = "https://activations.silverglidertickets.com/activations/:splat"
+  to = "https://silver-glider-tickets-production-e4a0.up.railway.app/activations/:splat"
   status = 200
   force = true
 
 # Panel de login de admin (servido por el backend)
 [[redirects]]
   from = "/activations-login"
-  to = "https://activations.silverglidertickets.com/activations-login"
+  to = "https://silver-glider-tickets-production-e4a0.up.railway.app/activations-login"
   status = 200
   force = true
 
 # Baja de la lista de emails
 [[redirects]]
   from = "/unsubscribe"
-  to = "https://activations.silverglidertickets.com/unsubscribe"
+  to = "https://silver-glider-tickets-production-e4a0.up.railway.app/unsubscribe"
   status = 200
   force = true
 
 # Health check
 [[redirects]]
   from = "/health"
-  to = "https://activations.silverglidertickets.com/health"
+  to = "https://silver-glider-tickets-production-e4a0.up.railway.app/health"
   status = 200
   force = true
