@@ -9,13 +9,49 @@ const { uploadImage } = require('../lib/cloudinary');
 const QRCode = require('qrcode');
 const { sendBoothConfirmation, sendWelcomeEmail, sendAdminBoothNotification } = require('../lib/mailer');
 const { frontendUrl } = require('../lib/urls');
+const { createCache } = require('../lib/cache');
+const { esc, jsStr, jsJson, safeUrl } = require('../lib/escape');
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 // Auto-close activations whose voting_ends_at has passed — runs every 60 seconds
 setInterval(async () => {
   const closed = await db.autoCloseExpired().catch(() => []);
-  if (closed.length) console.log('Auto-closed voting for:', closed.map(a => a.name).join(', '));
+  if (closed.length) {
+    console.log('Auto-closed voting for:', closed.map(a => a.name).join(', '));
+    invalidateActivationCaches();
+  }
 }, 60 * 1000);
+
+// --- Caches -----------------------------------------------------------------
+// Every route below starts by resolving the slug to an activation row, so this
+// one lookup is the most-hit query in the service. It changes only when an admin
+// acts (or auto-close fires), and both paths invalidate explicitly — so the TTL
+// is just a backstop, not the correctness mechanism.
+const activationCache = createCache({ ttlMs: 30 * 1000 });
+
+// The master QR sends every attendee to the landing; the leaderboard behind it
+// is three queries. 30s of staleness on vote counts is invisible to a human.
+const landingCache = createCache({ ttlMs: 30 * 1000 });
+
+// Each booth's QR points here, so this is the hottest page at the event — and it
+// was uncached. The HTML is identical for every attendee (the votes-left badge
+// is filled in client-side from localStorage), so it caches cleanly.
+const votingPageCache = createCache({ ttlMs: 30 * 1000 });
+
+// QR generation is CPU work in-process, and the encoded URL never changes for a
+// given booth. Regenerating it per request burns the event-day CPU budget.
+const qrCache = createCache({ ttlMs: 60 * 60 * 1000 });
+
+const cachedActivation = (slug) => activationCache.get(slug, () => db.getActivationBySlug(slug));
+
+// An admin action (approve, edit, close voting, reset) must show up immediately,
+// not up to 30s later — so mutations blow the caches away rather than wait out
+// the TTL. These caches are small and refill on the next request.
+function invalidateActivationCaches() {
+  activationCache.clear();
+  landingCache.clear();
+  votingPageCache.clear();
+}
 
 function spotifyEmbedUrl(url) {
   if (!url) return null;
@@ -66,7 +102,15 @@ const optinLimit = makeRateLimiter({
   message: 'Too many signups. Try again later.'
 });
 
-router.post('/admin/login', async (req, res) => {
+// The admin password is a single fixed string with no lockout — without this an
+// attacker can grind it at network speed.
+const adminLoginLimit = makeRateLimiter({
+  windowMs: 15 * 60 * 1000, max: 10,
+  keyFn: ipOf,
+  message: 'Too many login attempts. Try again later.'
+});
+
+router.post('/admin/login', adminLoginLimit, async (req, res) => {
   const { password } = req.body;
   const correct = process.env.ACTIVATIONS_ADMIN_PASS || 'activations2026';
   if (password !== correct) return res.status(401).json({ error: 'Wrong password' });
@@ -78,38 +122,40 @@ router.get('/admin/activations', (req, res) => {
   res.sendFile(path.resolve(__dirname, '../../frontend/views/activations-admin.html'));
 });
 
-router.get('/admin/activations/data', requireActivationsAdmin, async (req, res) => {
+router.get('/admin/activations/data', requireActivationsAdmin, async (req, res, next) => {
   try {
-    const activations = await db.getAllActivations();
-    res.json(activations);
+    res.json(await db.getAllActivations());
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/activations/create', requireActivationsAdmin, async (req, res) => {
+router.post('/admin/activations/create', requireActivationsAdmin, async (req, res, next) => {
   try {
     const { name, slug, description } = req.body;
+    if (!name || !slug) return res.status(400).json({ error: 'Name and slug are required' });
     const activation = await db.createActivation({ name, slug: slug.toLowerCase().replace(/\s+/g, '-'), description });
+    invalidateActivationCaches();
     res.json(activation);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/upload-image', requireActivationsAdmin, upload.single('image'), async (req, res) => {
+router.post('/admin/upload-image', requireActivationsAdmin, upload.single('image'), async (req, res, next) => {
   try {
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     const result = await uploadImage(req.file.buffer);
     res.json({ url: result.secure_url });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/activations/:id/participants', requireActivationsAdmin, upload.single('image'), async (req, res) => {
+router.post('/admin/activations/:id/participants', requireActivationsAdmin, upload.single('image'), async (req, res, next) => {
   try {
     let { name, slug, description, image_url, instagram_handle, booth_song_url } = req.body;
+    if (!name || !slug) return res.status(400).json({ error: 'Name and slug are required' });
     if (req.file) {
       const uploaded = await uploadImage(req.file.buffer);
       image_url = uploaded.secure_url;
@@ -119,13 +165,14 @@ router.post('/admin/activations/:id/participants', requireActivationsAdmin, uplo
       name, slug: slug.toLowerCase().replace(/\s+/g, '-'),
       description, image_url, instagram_handle, booth_song_url: booth_song_url || null
     });
+    invalidateActivationCaches();
     res.json(participant);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.put('/admin/activations/participants/:id', requireActivationsAdmin, upload.single('image'), async (req, res) => {
+router.put('/admin/activations/participants/:id', requireActivationsAdmin, upload.single('image'), async (req, res, next) => {
   try {
     let { name, slug, description, image_url, instagram_handle, booth_song_url } = req.body;
     if (req.file) {
@@ -133,67 +180,74 @@ router.put('/admin/activations/participants/:id', requireActivationsAdmin, uploa
       image_url = uploaded.secure_url;
     }
     const participant = await db.updateParticipant(req.params.id, { name, slug, description, image_url, instagram_handle, booth_song_url: booth_song_url || null });
+    invalidateActivationCaches();
     res.json(participant);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/admin/activations/:id/pending', requireActivationsAdmin, async (req, res) => {
+router.get('/admin/activations/:id/pending', requireActivationsAdmin, async (req, res, next) => {
   try {
-    const pending = await db.getPendingParticipants(req.params.id);
-    res.json(pending);
+    res.json(await db.getPendingParticipants(req.params.id));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/activations/participants/:id/approve', requireActivationsAdmin, async (req, res) => {
+router.post('/admin/activations/participants/:id/approve', requireActivationsAdmin, async (req, res, next) => {
   try {
     const participant = await db.approveParticipant(req.params.id);
+    invalidateActivationCaches();
     res.json(participant);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/activations/participants/:id/reject', requireActivationsAdmin, async (req, res) => {
+router.post('/admin/activations/participants/:id/reject', requireActivationsAdmin, async (req, res, next) => {
   try {
     const participant = await db.rejectParticipant(req.params.id);
+    invalidateActivationCaches();
     res.json(participant);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/admin/activations/:id/results', requireActivationsAdmin, async (req, res) => {
+router.get('/admin/activations/:id/results', requireActivationsAdmin, async (req, res, next) => {
   try {
-    const results = await db.getResultsByActivation(req.params.id);
-    const optins = await db.getOptinsByActivation(req.params.id);
+    const [results, optins] = await Promise.all([
+      db.getResultsByActivation(req.params.id),
+      db.getOptinsByActivation(req.params.id)
+    ]);
     res.json({ results, optins });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/admin/activations/:id/participants', requireActivationsAdmin, async (req, res) => {
+router.get('/admin/activations/:id/participants', requireActivationsAdmin, async (req, res, next) => {
   try {
-    const participants = await db.getParticipantsByActivation(req.params.id);
-    res.json(participants);
+    res.json(await db.getParticipantsByActivation(req.params.id));
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/:activationSlug/join', async (req, res) => {
-  const activation = await db.getActivationBySlug(req.params.activationSlug);
-  if (!activation || !activation.active) return res.status(404).send('Not found');
-  res.send(renderSignupPage(activation));
+router.get('/:activationSlug/join', async (req, res, next) => {
+  try {
+    const activation = await cachedActivation(req.params.activationSlug);
+    if (!activation || !activation.active) return res.status(404).send('Not found');
+    res.send(renderSignupPage(activation));
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.post('/:activationSlug/join', upload.single('image'), async (req, res) => {
+router.post('/:activationSlug/join', upload.single('image'), async (req, res, next) => {
   try {
-    const activation = await db.getActivationBySlug(req.params.activationSlug);
+    const activation = await cachedActivation(req.params.activationSlug);
     if (!activation || !activation.active) return res.status(404).json({ error: 'Not found' });
     const { name, description, contact_email, contact_phone, instagram_handle, booth_song_url } = req.body;
     if (!name) return res.status(400).json({ error: 'Name required' });
@@ -209,122 +263,156 @@ router.post('/:activationSlug/join', upload.single('image'), async (req, res) =>
       activation_id: activation.id, name, slug, description, image_url,
       status: 'approved', contact_email, contact_phone, instagram_handle, booth_song_url: booth_song_url || null
     });
+    // The booth must appear on the leaderboard now — the vendor is standing there
+    // with their phone, and "my booth isn't listed" is a support call at the event.
+    invalidateActivationCaches();
     if (contact_email) {
-      const baseUrl = frontendUrl();
-      const profileUrl = `${baseUrl}/activations/${activation.slug}/${slug}/profile`;
-      sendBoothConfirmation({ to: contact_email, boothName: name, activationName: activation.name, profileUrl }).catch(() => {});
-      sendAdminBoothNotification({ boothName: name, activationName: activation.name, contactEmail: contact_email, contactPhone: contact_phone, instagramHandle: instagram_handle, profileUrl }).catch(() => {});
+      const profileUrl = `${frontendUrl()}/activations/${activation.slug}/${slug}/profile`;
+      // Deliberately not awaited: a slow or down Resend must not make registration
+      // fail or hang. But a swallowed error is an invisible one — log it.
+      sendBoothConfirmation({ to: contact_email, boothName: name, activationName: activation.name, profileUrl })
+        .catch((e) => console.error('[mail] booth confirmation failed:', e.message));
+      sendAdminBoothNotification({ boothName: name, activationName: activation.name, contactEmail: contact_email, contactPhone: contact_phone, instagramHandle: instagram_handle, profileUrl })
+        .catch((e) => console.error('[mail] admin notification failed:', e.message));
     }
     res.json({ success: true, participant });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-// Landing page cache — the master QR sends every attendee here, so at peak this
-// page gets hammered. 30 seconds of staleness on the leaderboard is invisible;
-// the ~95% cut in DB queries is not.
-const landingCache = new Map();
-const LANDING_TTL_MS = 30 * 1000;
-
-router.get('/:activationSlug', async (req, res) => {
-  const cached = landingCache.get(req.params.activationSlug);
-  if (cached && Date.now() - cached.at < LANDING_TTL_MS) return res.send(cached.html);
-  const activation = await db.getActivationBySlug(req.params.activationSlug);
-  if (!activation || !activation.active) return res.status(404).send('Not found');
-  const participants = await db.getParticipantsByActivation(activation.id);
-  const results = await db.getResultsByActivation(activation.id);
-  const voteMap = {};
-  results.forEach(r => { voteMap[r.slug] = parseInt(r.positive) || 0; });
-  const html = renderActivationLanding(activation, participants, voteMap);
-  landingCache.set(req.params.activationSlug, { html, at: Date.now() });
-  res.send(html);
+router.get('/:activationSlug', async (req, res, next) => {
+  try {
+    const html = await landingCache.get(req.params.activationSlug, async () => {
+      const activation = await cachedActivation(req.params.activationSlug);
+      if (!activation || !activation.active) return null;
+      // Independent queries — no reason to pay for them serially.
+      const [participants, results] = await Promise.all([
+        db.getParticipantsByActivation(activation.id),
+        db.getResultsByActivation(activation.id)
+      ]);
+      const voteMap = {};
+      results.forEach(r => { voteMap[r.slug] = parseInt(r.positive) || 0; });
+      return renderActivationLanding(activation, participants, voteMap);
+    });
+    if (!html) return res.status(404).send('Not found');
+    res.send(html);
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.post('/admin/activations/:id/close-voting', requireActivationsAdmin, async (req, res) => {
+router.post('/admin/activations/:id/close-voting', requireActivationsAdmin, async (req, res, next) => {
   try {
     const activation = await db.closeVoting(req.params.id);
+    // Critical: the vote endpoint reads voting_closed off the cached activation.
+    // Without this, votes keep landing for up to a TTL after the admin closes.
+    invalidateActivationCaches();
     res.json(activation);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/activations/:id/reset-votes', requireActivationsAdmin, async (req, res) => {
+router.post('/admin/activations/:id/reset-votes', requireActivationsAdmin, async (req, res, next) => {
   try {
     const result = await db.resetVotes(req.params.id);
-    landingCache.clear();
+    invalidateActivationCaches();
     res.json(result);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/admin/activations/:id/set-voting-ends', requireActivationsAdmin, async (req, res) => {
+router.post('/admin/activations/:id/set-voting-ends', requireActivationsAdmin, async (req, res, next) => {
   try {
     const { voting_ends_at } = req.body;
     const activation = await db.setVotingEndsAt(req.params.id, voting_ends_at || null);
+    invalidateActivationCaches();
     res.json(activation);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/:activationSlug/winner', async (req, res) => {
-  const activation = await db.getActivationBySlug(req.params.activationSlug);
-  if (!activation) return res.status(404).send('Not found');
-  const winner = await db.getWinner(activation.id);
-  res.send(renderWinnerPage(activation, winner));
+router.get('/:activationSlug/winner', async (req, res, next) => {
+  try {
+    const activation = await cachedActivation(req.params.activationSlug);
+    if (!activation) return res.status(404).send('Not found');
+    const winner = await db.getWinner(activation.id);
+    res.send(renderWinnerPage(activation, winner));
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.get('/:activationSlug/qr', async (req, res) => {
-  const activation = await db.getActivationBySlug(req.params.activationSlug);
-  if (!activation) return res.status(404).send('Not found');
-  const baseUrl = frontendUrl();
-  const landingUrl = `${baseUrl}/activations/${activation.slug}`;
-  const qrDataUrl = await QRCode.toDataURL(landingUrl, { width: 320, margin: 2, color: { dark: '#0a0a0a', light: '#f5f0eb' } });
-  res.send(renderMasterQRPage(activation, landingUrl, qrDataUrl));
+router.get('/:activationSlug/qr', async (req, res, next) => {
+  try {
+    const activation = await cachedActivation(req.params.activationSlug);
+    if (!activation) return res.status(404).send('Not found');
+    const landingUrl = `${frontendUrl()}/activations/${activation.slug}`;
+    const qrDataUrl = await qrCache.get(landingUrl, () =>
+      QRCode.toDataURL(landingUrl, { width: 320, margin: 2, color: { dark: '#0a0a0a', light: '#f5f0eb' } }));
+    res.send(renderMasterQRPage(activation, landingUrl, qrDataUrl));
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Lightweight votes-left lookup — pages personalize their badges with this,
 // since the landing page HTML is cached and shared across attendees.
 // Must be registered before /:activationSlug/:participantSlug or it gets swallowed.
-router.get('/:activationSlug/votes-left', async (req, res) => {
+router.get('/:activationSlug/votes-left', async (req, res, next) => {
   try {
     const fp = String(req.query.fp || '');
     if (fp.length < 4 || fp.length > 128) return res.json({ votesLeft: MAX_BALLOTS, maxVotes: MAX_BALLOTS });
-    const activation = await db.getActivationBySlug(req.params.activationSlug);
+    const activation = await cachedActivation(req.params.activationSlug);
     if (!activation) return res.status(404).json({ error: 'Not found' });
     const used = await db.countPositiveVotes(activation.id, fp);
     res.json({ votesLeft: Math.max(0, MAX_BALLOTS - used), maxVotes: MAX_BALLOTS });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.get('/:activationSlug/:participantSlug/profile', async (req, res) => {
-  const activation = await db.getActivationBySlug(req.params.activationSlug);
-  if (!activation) return res.status(404).send('Not found');
-  const participant = await db.getParticipantBySlug(activation.id, req.params.participantSlug);
-  if (!participant) return res.status(404).send('Not found');
-  const baseUrl = frontendUrl();
-  const voteUrl = `${baseUrl}/activations/${activation.slug}/${participant.slug}`;
-  const qrDataUrl = await QRCode.toDataURL(voteUrl, { width: 280, margin: 2, color: { dark: '#0a0a0a', light: '#f5f0eb' } });
-  res.send(renderProfilePage(activation, participant, voteUrl, qrDataUrl));
+router.get('/:activationSlug/:participantSlug/profile', async (req, res, next) => {
+  try {
+    const activation = await cachedActivation(req.params.activationSlug);
+    if (!activation) return res.status(404).send('Not found');
+    const participant = await db.getParticipantBySlug(activation.id, req.params.participantSlug);
+    if (!participant) return res.status(404).send('Not found');
+    const voteUrl = `${frontendUrl()}/activations/${activation.slug}/${participant.slug}`;
+    const qrDataUrl = await qrCache.get(voteUrl, () =>
+      QRCode.toDataURL(voteUrl, { width: 280, margin: 2, color: { dark: '#0a0a0a', light: '#f5f0eb' } }));
+    res.send(renderProfilePage(activation, participant, voteUrl, qrDataUrl));
+  } catch (err) {
+    next(err);
+  }
 });
 
-router.get('/:activationSlug/:participantSlug', async (req, res) => {
-  const activation = await db.getActivationBySlug(req.params.activationSlug);
-  if (!activation || !activation.active) return res.status(404).send('Not found');
-  const participant = await db.getParticipantBySlug(activation.id, req.params.participantSlug);
-  if (!participant) return res.status(404).send('Not found');
-  const allParticipants = await db.getParticipantsByActivation(activation.id);
-  res.send(renderVotingPage(activation, participant, activation.voting_closed, allParticipants));
+router.get('/:activationSlug/:participantSlug', async (req, res, next) => {
+  try {
+    const key = `${req.params.activationSlug}/${req.params.participantSlug}`;
+    const html = await votingPageCache.get(key, async () => {
+      const activation = await cachedActivation(req.params.activationSlug);
+      if (!activation || !activation.active) return null;
+      const [participant, allParticipants] = await Promise.all([
+        db.getParticipantBySlug(activation.id, req.params.participantSlug),
+        db.getParticipantsByActivation(activation.id)
+      ]);
+      if (!participant) return null;
+      return renderVotingPage(activation, participant, activation.voting_closed, allParticipants);
+    });
+    if (!html) return res.status(404).send('Not found');
+    res.send(html);
+  } catch (err) {
+    next(err);
+  }
 });
 
 const MAX_BALLOTS = 5;
 
-router.post('/:activationSlug/:participantSlug/vote', voteLimitPerIp, voteLimitPerDevice, async (req, res) => {
+router.post('/:activationSlug/:participantSlug/vote', voteLimitPerIp, voteLimitPerDevice, async (req, res, next) => {
   try {
     const { vote, fingerprint } = req.body;
     // Without a real fingerprint the dedup constraint can't hold — reject early
@@ -332,7 +420,7 @@ router.post('/:activationSlug/:participantSlug/vote', voteLimitPerIp, voteLimitP
       return res.status(400).json({ error: 'Invalid request' });
     }
     if (!['rules', 'hell_yeah', 'no_thanks'].includes(vote)) return res.status(400).json({ error: 'Invalid vote' });
-    const activation = await db.getActivationBySlug(req.params.activationSlug);
+    const activation = await cachedActivation(req.params.activationSlug);
     if (!activation) return res.status(404).json({ error: 'Not found' });
     const participant = await db.getParticipantBySlug(activation.id, req.params.participantSlug);
     if (!participant) return res.status(404).json({ error: 'Not found' });
@@ -348,17 +436,17 @@ router.post('/:activationSlug/:participantSlug/vote', voteLimitPerIp, voteLimitP
     if (isPositive && !result.duplicate) used++;
     res.json({ ...result, votesLeft: Math.max(0, MAX_BALLOTS - used), maxVotes: MAX_BALLOTS });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
-router.post('/:activationSlug/:participantSlug/optin', optinLimit, async (req, res) => {
+router.post('/:activationSlug/:participantSlug/optin', optinLimit, async (req, res, next) => {
   try {
     const email = String(req.body.email || '').trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
       return res.status(400).json({ error: 'Enter a valid email' });
     }
-    const activation = await db.getActivationBySlug(req.params.activationSlug);
+    const activation = await cachedActivation(req.params.activationSlug);
     if (!activation) return res.status(404).json({ error: 'Not found' });
     const participant = await db.getParticipantBySlug(activation.id, req.params.participantSlug);
     if (!participant) return res.status(404).json({ error: 'Not found' });
@@ -366,10 +454,10 @@ router.post('/:activationSlug/:participantSlug/optin', optinLimit, async (req, r
     const existing = await db.getOptinByEmail(activation.id, email);
     if (existing) return res.json({ success: true });
     const optin = await db.createOptin({ activation_id: activation.id, participant_id: participant.id, email });
-    sendWelcomeEmail({ to: email }).catch(() => {});
+    sendWelcomeEmail({ to: email }).catch((e) => console.error('[mail] welcome failed:', e.message));
     res.json({ success: true, optin });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    next(err);
   }
 });
 
@@ -383,7 +471,7 @@ function renderSignupPage(activation) {
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>Join ${activation.name}</title>
+<title>Join ${esc(activation.name)}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;background:#0a0a0a url('/thrift-bg.jpg') center/cover fixed;-webkit-text-size-adjust:100%}
@@ -421,7 +509,7 @@ header .sub{font-size:14px;color:#888;margin-top:6px}
 <body>
 <header>
   <a href="/" class="sg-logo"><img src="/logo.png" alt="Silver Glider"><div><span class="sg-logo-name">Silver Glider</span><span class="sg-logo-sub">Music Discovery</span></div></a>
-  <h1>${activation.name}</h1>
+  <h1>${esc(activation.name)}</h1>
   <p class="sub">Best Booth Award — Register to compete</p>
 </header>
 <div class="container">
@@ -583,20 +671,19 @@ async function submitForm() {
 }
 
 function renderActivationLanding(activation, participants, voteMap = {}) {
-  const slugList = JSON.stringify(participants.map(p => p.slug));
-  const voteData = JSON.stringify(voteMap);
+  const slugList = jsJson(participants.map(p => p.slug));
   const cards = participants.map(p => `
-    <a href="/activations/${activation.slug}/${p.slug}" class="booth-card" data-slug="${p.slug}" data-name="${p.name.toLowerCase()}" data-votes="${voteMap[p.slug] || 0}" id="card-${p.slug}">
-      ${p.image_url
-        ? `<div class="booth-img" style="background-image:url('${p.image_url}')"></div>`
-        : `<div class="booth-img booth-img-placeholder"><span>${p.name[0]}</span></div>`}
+    <a href="/activations/${esc(activation.slug)}/${esc(p.slug)}" class="booth-card" data-slug="${esc(p.slug)}" data-name="${esc(p.name.toLowerCase())}" data-votes="${voteMap[p.slug] || 0}" id="card-${esc(p.slug)}">
+      ${safeUrl(p.image_url)
+        ? `<div class="booth-img" style="background-image:url('${safeUrl(p.image_url)}')"></div>`
+        : `<div class="booth-img booth-img-placeholder"><span>${esc(p.name[0])}</span></div>`}
       <div class="booth-body">
         <div class="booth-meta">
-          <h3>${p.name}</h3>
-          ${p.description ? `<p>${p.description}</p>` : ''}
+          <h3>${esc(p.name)}</h3>
+          ${p.description ? `<p>${esc(p.description)}</p>` : ''}
         </div>
         <div class="vote-btn-wrap">
-          <span class="vote-btn" id="vbtn-${p.slug}">Vote</span>
+          <span class="vote-btn" id="vbtn-${esc(p.slug)}">Vote</span>
         </div>
       </div>
     </a>
@@ -611,7 +698,7 @@ function renderActivationLanding(activation, participants, voteMap = {}) {
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>${activation.name}</title>
+<title>${esc(activation.name)}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;background:#0a0a0a url('/landing-bg.jpg') center/cover fixed;-webkit-text-size-adjust:100%}
@@ -650,7 +737,7 @@ footer{text-align:center;padding:32px max(20px,env(safe-area-inset-right)) max(3
 <body>
 <header>
   <a href="/" class="sg-logo"><img src="/logo.png" alt="Silver Glider"><div class="sg-logo-text"><span class="sg-logo-name">Silver Glider</span><span class="sg-logo-sub">Music Discovery</span></div></a>
-  <h1>${activation.name}</h1>
+  <h1>${esc(activation.name)}</h1>
   <div class="stats-bar"><span>${participants.length}</span> booth${participants.length !== 1 ? 's' : ''} competing — tap one to vote</div>
   <div id="ballots-badge" style="display:none;text-align:center;margin-top:10px"><span style="display:inline-block;font-size:13px;font-weight:600;color:#1CC5BE;background:rgba(28,197,190,.08);border:1px solid rgba(28,197,190,.2);border-radius:20px;padding:7px 16px"></span></div>
   <div id="progress-wrap" style="display:none;margin-top:14px;width:100%;max-width:400px;margin-left:auto;margin-right:auto">
@@ -702,7 +789,11 @@ footer{text-align:center;padding:32px max(20px,env(safe-area-inset-right)) max(3
 (function(){
   var slugs = ${slugList};
   var total = slugs.length;
-  var key = 'sg_voted_${activation.slug}';
+  // Server-side values enter the script exactly once, JS-escaped, and are reused
+  // as variables below — interpolating them into quoted literals inline is how a
+  // booth name breaks out of the string and runs.
+  var ACTIVATION_SLUG = ${jsStr(activation.slug)};
+  var key = 'sg_voted_' + ACTIVATION_SLUG;
   var currentSort = 'votes';
 
   window.setSort = function(mode) {
@@ -722,7 +813,7 @@ footer{text-align:center;padding:32px max(20px,env(safe-area-inset-right)) max(3
 
   // default to votes on load
   window.setSort('votes');
-  var base = '/activations/${activation.slug}/';
+  var base = '/activations/' + encodeURIComponent(ACTIVATION_SLUG) + '/';
 
   function getVoted() { return JSON.parse(localStorage.getItem(key) || '[]'); }
 
@@ -737,7 +828,7 @@ footer{text-align:center;padding:32px max(20px,env(safe-area-inset-right)) max(3
       return;
     }
     try {
-      var res = await fetch('/activations/${activation.slug}/votes-left?fp=' + encodeURIComponent(fp));
+      var res = await fetch(base + 'votes-left?fp=' + encodeURIComponent(fp));
       var data = await res.json();
       badge.style.display = 'block';
       if (data.votesLeft <= 0) {
@@ -796,7 +887,7 @@ footer{text-align:center;padding:32px max(20px,env(safe-area-inset-right)) max(3
     if (next) {
       window.location.href = base + next;
     } else {
-      window.location.href = '/activations/${activation.slug}/winner';
+      window.location.href = base + 'winner';
     }
   };
 
@@ -808,7 +899,7 @@ footer{text-align:center;padding:32px max(20px,env(safe-area-inset-right)) max(3
 }
 
 function renderVotingPage(activation, participant, votingClosed = false, allParticipants = []) {
-  const slugList = JSON.stringify(allParticipants.map(p => p.slug));
+  const slugList = jsJson(allParticipants.map(p => p.slug));
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -818,7 +909,7 @@ function renderVotingPage(activation, participant, votingClosed = false, allPart
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>${participant.name} — ${activation.name}</title>
+<title>${esc(participant.name)} — ${esc(activation.name)}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;background:#0a0a0a url('/voting-bg.jpg') center/cover fixed;-webkit-text-size-adjust:100%}
@@ -865,21 +956,21 @@ footer span{color:#333}
 </head>
 <body>
 <header>
-  <a href="/activations/${activation.slug}">&larr; All Booths</a>
+  <a href="/activations/${esc(activation.slug)}">&larr; All Booths</a>
   <span>/</span>
-  <span style="color:#444;font-size:13px">${activation.name}</span>
+  <span style="color:#444;font-size:13px">${esc(activation.name)}</span>
 </header>
 
 <div class="hero">
-  ${participant.image_url
-    ? `<img src="${participant.image_url}" alt="${participant.name}">`
-    : `<div class="hero-placeholder">${participant.name[0]}</div>`}
+  ${safeUrl(participant.image_url)
+    ? `<img src="${safeUrl(participant.image_url)}" alt="${esc(participant.name)}">`
+    : `<div class="hero-placeholder">${esc(participant.name[0])}</div>`}
   <div class="hero-overlay">
-    <h1>${participant.name}</h1>
-    ${participant.description ? `<p class="desc">${participant.description}</p>` : ''}
-    ${participant.instagram_handle ? `<a href="https://instagram.com/${participant.instagram_handle}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:5px;color:rgba(255,255,255,.5);text-decoration:none;font-size:12px;margin-top:8px">
+    <h1>${esc(participant.name)}</h1>
+    ${participant.description ? `<p class="desc">${esc(participant.description)}</p>` : ''}
+    ${participant.instagram_handle ? `<a href="https://instagram.com/${encodeURIComponent(participant.instagram_handle)}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:5px;color:rgba(255,255,255,.5);text-decoration:none;font-size:12px;margin-top:8px">
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor" stroke="none"/></svg>
-      @${participant.instagram_handle}
+      @${esc(participant.instagram_handle)}
     </a>` : ''}
   </div>
 </div>
@@ -891,7 +982,7 @@ footer span{color:#333}
       <div style="font-size:28px;margin-bottom:8px">🏁</div>
       <p style="font-size:16px;font-weight:700;margin-bottom:6px">Voting is closed</p>
       <p style="font-size:14px;color:#888;margin-bottom:16px">The winner has been announced.</p>
-      <a href="/activations/${activation.slug}/winner" style="display:inline-block;background:#1CC5BE;color:#0a0a0a;padding:12px 28px;border-radius:10px;font-size:15px;font-weight:700;text-decoration:none">See the winner</a>
+      <a href="/activations/${esc(activation.slug)}/winner" style="display:inline-block;background:#1CC5BE;color:#0a0a0a;padding:12px 28px;border-radius:10px;font-size:15px;font-weight:700;text-decoration:none">See the winner</a>
     </div>
     ` : `
     <p class="vote-label">Best Booth Award — cast your vote</p>
@@ -917,13 +1008,13 @@ footer span{color:#333}
   </div>
 
   <div id="thank-you">
-    <a id="next-booth-btn" href="/activations/${activation.slug}" style="display:flex;align-items:center;justify-content:center;gap:8px;background:#1CC5BE;color:#0a0a0a;border:none;border-radius:14px;padding:17px;font-size:17px;font-weight:700;text-decoration:none;margin-bottom:10px;min-height:54px">
+    <a id="next-booth-btn" href="/activations/${esc(activation.slug)}" style="display:flex;align-items:center;justify-content:center;gap:8px;background:#1CC5BE;color:#0a0a0a;border:none;border-radius:14px;padding:17px;font-size:17px;font-weight:700;text-decoration:none;margin-bottom:10px;min-height:54px">
       Next booth <span style="font-size:20px">→</span>
     </a>
 
     <div class="share-block">
       <h2 id="thanks-headline">Vote counted.</h2>
-      <p id="thanks-sub">Help ${participant.name} win — share this page.</p>
+      <p id="thanks-sub">Help ${esc(participant.name)} win — share this page.</p>
       <button class="share-btn" onclick="shareVote()">Share this booth</button>
     </div>
 
@@ -950,8 +1041,12 @@ footer span{color:#333}
 </footer>
 <script>
 var SLUG_LIST = ${slugList};
-var ACTIVATION_SLUG = '${activation.slug}';
-var THIS_SLUG = '${participant.slug}';
+// JS-escaped, not dropped into a quoted literal: a booth name or slug containing
+// a quote would otherwise close the string and run as code.
+var ACTIVATION_SLUG = ${jsStr(activation.slug)};
+var THIS_SLUG = ${jsStr(participant.slug)};
+var THIS_NAME = ${jsStr(participant.name)};
+var ACTIVATION_NAME = ${jsStr(activation.name)};
 var VOTED_KEY = 'sg_voted_' + ACTIVATION_SLUG;
 
 function getFingerprint() {
@@ -1048,10 +1143,10 @@ async function castVote(vote) {
       sub.textContent = "Didn't use one of your votes — " + data.votesLeft + ' of ' + data.maxVotes + ' left.';
     } else if (data.votesLeft <= 0) {
       headline.textContent = "That's all " + data.maxVotes + ' votes.';
-      sub.textContent = 'Winner announced when voting closes. Help ${participant.name} win — share this page.';
+      sub.textContent = 'Winner announced when voting closes. Help ' + THIS_NAME + ' win — share this page.';
     } else {
       headline.textContent = 'Vote counted — ' + data.votesLeft + ' left.';
-      sub.textContent = 'Spend them well. Help ${participant.name} win — share this page.';
+      sub.textContent = 'Spend them well. Help ' + THIS_NAME + ' win — share this page.';
     }
   }
   document.getElementById('vote-section').style.display = 'none';
@@ -1061,7 +1156,7 @@ async function castVote(vote) {
 function shareVote() {
   const url = window.location.href;
   if (navigator.share) {
-    navigator.share({ title: '${participant.name} — Best Booth Award', text: 'Vote for ${participant.name} at ${activation.name}', url });
+    navigator.share({ title: THIS_NAME + ' — Best Booth Award', text: 'Vote for ' + THIS_NAME + ' at ' + ACTIVATION_NAME, url });
   } else {
     navigator.clipboard.writeText(url);
     const btn = document.querySelector('.share-btn');
@@ -1096,7 +1191,7 @@ function renderWinnerPage(activation, winner) {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover">
 <meta name="theme-color" content="#0a0a0a">
-<title>🏆 ${winner ? winner.name : 'Winner'} — ${activation.name}</title>
+<title>🏆 ${winner ? esc(winner.name) : 'Winner'} — ${esc(activation.name)}</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{background:#0a0a0a url('/winner-bg.jpg') center/cover fixed;color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;padding-top:max(24px,env(safe-area-inset-top))}
@@ -1120,22 +1215,22 @@ footer{font-size:12px;color:#888;padding:20px;text-align:center;font-weight:500}
 </head>
 <body>
 <div class="confetti">🎉🏆🎉</div>
-<p class="event-label">${activation.name}</p>
+<p class="event-label">${esc(activation.name)}</p>
 <h1>Best Booth Award Winner</h1>
 
 ${winner ? `
 <div class="winner-card">
-  ${winner.image_url
-    ? `<img class="winner-img" src="${winner.image_url}" alt="${winner.name}">`
-    : `<div class="winner-placeholder">${winner.name[0]}</div>`}
+  ${safeUrl(winner.image_url)
+    ? `<img class="winner-img" src="${safeUrl(winner.image_url)}" alt="${esc(winner.name)}">`
+    : `<div class="winner-placeholder">${esc(winner.name[0])}</div>`}
   <div class="winner-body">
     <div class="crown">🏆</div>
-    <div class="winner-name">${winner.name}</div>
-    ${winner.description ? `<p class="winner-desc">${winner.description}</p>` : ''}
-    <p class="vote-count">${winner.total} votes</p>
-    ${winner.instagram_handle ? `<a href="https://instagram.com/${winner.instagram_handle}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;color:#555;text-decoration:none;font-size:13px;margin-top:10px">
+    <div class="winner-name">${esc(winner.name)}</div>
+    ${winner.description ? `<p class="winner-desc">${esc(winner.description)}</p>` : ''}
+    <p class="vote-count">${esc(winner.total)} votes</p>
+    ${winner.instagram_handle ? `<a href="https://instagram.com/${encodeURIComponent(winner.instagram_handle)}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:6px;color:#555;text-decoration:none;font-size:13px;margin-top:10px">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="5" ry="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.5" cy="6.5" r="1.5" fill="currentColor" stroke="none"/></svg>
-      @${winner.instagram_handle}
+      @${esc(winner.instagram_handle)}
     </a>` : ''}
     <button class="share-btn" onclick="shareWinner()">Share the winner</button>
   </div>
@@ -1162,12 +1257,16 @@ ${winner ? `
   </a>
 </footer>
 <script>
+var WINNER_URL = ${jsStr(winnerUrl)};
+var WINNER_NAME = ${jsStr(winner ? winner.name : '')};
+var ACTIVATION_NAME = ${jsStr(activation.name)};
+var OPTIN_URL = ${jsStr(`/activations/${activation.slug}/${winner ? winner.slug : 'winner'}/optin`)};
+
 function shareWinner() {
-  const url = '${winnerUrl}';
   if (navigator.share) {
-    navigator.share({ title: '🏆 ${winner ? winner.name : ''} wins ${activation.name}!', url });
+    navigator.share({ title: '🏆 ' + WINNER_NAME + ' wins ' + ACTIVATION_NAME + '!', url: WINNER_URL });
   } else {
-    navigator.clipboard.writeText(url);
+    navigator.clipboard.writeText(WINNER_URL);
     const btn = document.querySelector('.share-btn');
     btn.textContent = 'Link copied!';
     setTimeout(() => btn.textContent = 'Share the winner', 2000);
@@ -1176,7 +1275,7 @@ function shareWinner() {
 async function submitWinnerOptin() {
   const email = document.getElementById('winner-email').value.trim();
   if (!email) return;
-  await fetch('/activations/${activation.slug}/${winner ? winner.slug : 'winner'}/optin', {
+  await fetch(OPTIN_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email })
@@ -1200,7 +1299,7 @@ function renderMasterQRPage(activation, landingUrl, qrDataUrl) {
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>${activation.name} — Master QR</title>
+<title>${esc(activation.name)} — Master QR</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{background:#0a0a0a;color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;-webkit-text-size-adjust:100%}
@@ -1234,14 +1333,14 @@ footer{font-size:11px;color:#2a2a2a;padding:20px}
 <header><a href="/activations/admin/activations">&larr; Back to admin</a></header>
 <div class="card">
   <p class="event-label">Master QR Code</p>
-  <h1>${activation.name}</h1>
+  <h1>${esc(activation.name)}</h1>
   <p class="sub">Place at entrance — scan to see all booths and vote</p>
   <div class="qr-section">
-    <img src="${qrUrl}" alt="QR code for ${activation.name}">
+    <img src="${esc(qrUrl)}" alt="QR code for ${esc(activation.name)}">
     <p class="qr-label">Vote for Best Booth</p>
     <p class="qr-sub">Scan to see all booths competing</p>
   </div>
-  <p class="url">${landingUrl}</p>
+  <p class="url">${esc(landingUrl)}</p>
   <button class="print-btn" id="qr-action-btn" style="margin-top:20px" onclick="handleQRAction()">
     <span id="qr-action-icon"></span>
     <span id="qr-action-label">Print this page</span>
@@ -1265,9 +1364,11 @@ footer{font-size:11px;color:#2a2a2a;padding:20px}
     icon.innerHTML='<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>';
     label.textContent='Print this page';
   }
+  var ACTIVATION_NAME=${jsStr(activation.name)};
+  var LANDING_URL=${jsStr(landingUrl)};
   window.handleQRAction=function(){
     if(isMobile&&navigator.share){
-      navigator.share({title:'${activation.name} — Vote for Best Booth',url:'${landingUrl}'}).catch(function(){});
+      navigator.share({title:ACTIVATION_NAME+' — Vote for Best Booth',url:LANDING_URL}).catch(function(){});
     } else {
       window.print();
     }
@@ -1289,7 +1390,7 @@ function renderProfilePage(activation, participant, voteUrl, qrDataUrl) {
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<title>${participant.name} — Booth Profile</title>
+<title>${esc(participant.name)} — Booth Profile</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 body{background:#0a0a0a url('/profile-bg.jpg') center/cover fixed;color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh;display:flex;flex-direction:column;align-items:center;-webkit-text-size-adjust:100%}
@@ -1330,7 +1431,7 @@ footer{font-size:11px;color:#2a2a2a;padding:20px;text-align:center}
 </head>
 <body>
 <header>
-  <a href="/activations/${activation.slug}/${participant.slug}">&larr; Back to voting</a>
+  <a href="/activations/${esc(activation.slug)}/${esc(participant.slug)}">&larr; Back to voting</a>
 </header>
 
 <div class="vendor-banner" style="position:relative;z-index:1;width:100%;max-width:420px;margin:0 16px 12px;background:rgba(28,197,190,.08);border:1px solid rgba(28,197,190,.2);border-radius:10px;padding:10px 14px;display:flex;align-items:center;gap:10px">
@@ -1339,19 +1440,19 @@ footer{font-size:11px;color:#2a2a2a;padding:20px;text-align:center}
 </div>
 
 <div class="card">
-  ${participant.image_url
-    ? `<img class="booth-img" src="${participant.image_url}" alt="${participant.name}">`
-    : `<div class="booth-placeholder">${participant.name[0]}</div>`}
+  ${safeUrl(participant.image_url)
+    ? `<img class="booth-img" src="${safeUrl(participant.image_url)}" alt="${esc(participant.name)}">`
+    : `<div class="booth-placeholder">${esc(participant.name[0])}</div>`}
   <div class="card-body">
-    <p class="activation-label">${activation.name}</p>
-    <h1>${participant.name}</h1>
-    ${participant.description ? `<p class="desc">${participant.description}</p>` : ''}
+    <p class="activation-label">${esc(activation.name)}</p>
+    <h1>${esc(participant.name)}</h1>
+    ${participant.description ? `<p class="desc">${esc(participant.description)}</p>` : ''}
 
     <div class="qr-section">
-      <img src="${qrUrl}" alt="QR code to vote for ${participant.name}">
+      <img src="${esc(qrUrl)}" alt="QR code to vote for ${esc(participant.name)}">
       <p class="qr-label">Scan to vote for this booth</p>
       <p class="qr-sub">Best Booth Award — top booth wins 2 concert tickets</p>
-      <span class="vote-link">${voteUrl}</span>
+      <span class="vote-link">${esc(voteUrl)}</span>
     </div>
 
     <button class="print-btn" id="action-btn" onclick="handleAction()">
@@ -1376,13 +1477,16 @@ footer{font-size:11px;color:#2a2a2a;padding:20px;text-align:center}
     icon.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>';
     label.textContent = 'Print this page';
   }
+  var BOOTH_NAME = ${jsStr(participant.name)};
+  var VOTE_URL = ${jsStr(voteUrl)};
+  var BOOTH_SLUG = ${jsStr(participant.slug)};
   window.handleAction = function() {
     if (isMobile && navigator.share) {
-      navigator.share({ title: '${participant.name} — Vote for Best Booth', url: '${voteUrl}' }).catch(function(){});
+      navigator.share({ title: BOOTH_NAME + ' — Vote for Best Booth', url: VOTE_URL }).catch(function(){});
     } else if (isMobile) {
       var a = document.createElement('a');
       a.href = document.querySelector('.qr-section img').src;
-      a.download = '${participant.slug}-qr.png';
+      a.download = BOOTH_SLUG + '-qr.png';
       a.click();
     } else {
       window.print();
