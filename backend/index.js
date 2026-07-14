@@ -53,6 +53,10 @@ async function start() {
   // real client once we trust the proxy's X-Forwarded-* headers.
   app.set('trust proxy', 1);
 
+  // Before the routes and the static assets, so a preflight is answered here and
+  // cross-origin image/logo requests carry the allow-header too.
+  app.use(require('./middleware/cors')());
+
   app.use(express.json({ limit: '100kb' }));
   app.use(express.static(path.join(__dirname, '../frontend/public'), {
     maxAge: '1h',

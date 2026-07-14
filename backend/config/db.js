@@ -9,13 +9,19 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
   max: 20,
-  idleTimeoutMillis: 30000,
+  // Close our own idle clients BEFORE the proxy in front of a managed Postgres
+  // silently drops them. If the proxy wins the race we find out the ugly way —
+  // an ECONNRESET on a connection we thought was good.
+  idleTimeoutMillis: 10000,
   // A cold TLS handshake to a managed Postgres regularly needs more than 2s; a
   // too-tight budget turns a slow connect into a failed request under load.
   connectionTimeoutMillis: 10000,
-  // Proxies in front of managed Postgres drop idle TCP sessions silently. TCP
-  // keepalives keep the socket observably alive so we notice a dead peer.
+  // TCP keepalives stop a proxy/NAT from considering an idle socket dead.
+  // keepAlive alone is not enough: the delay defaults to the OS value (often two
+  // HOURS), so probes never fire in time to matter. The explicit delay is what
+  // actually does the work here.
   keepAlive: true,
+  keepAliveInitialDelayMillis: 5000,
   // Recycle connections so a long-lived one can't outlive a failover.
   maxUses: 7500
 });

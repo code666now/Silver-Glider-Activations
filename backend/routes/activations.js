@@ -42,7 +42,16 @@ const votingPageCache = createCache({ ttlMs: 30 * 1000 });
 // given booth. Regenerating it per request burns the event-day CPU budget.
 const qrCache = createCache({ ttlMs: 60 * 60 * 1000 });
 
-const cachedActivation = (slug) => activationCache.get(slug, () => db.getActivationBySlug(slug));
+// `/admin` is a route namespace, never a booth slug. The public `/:activationSlug`
+// routes are greedy enough to swallow any unmatched admin path and then look it up
+// as an activation — which costs a pointless query on every hit to a mistyped or
+// unknown admin URL. Short-circuit it.
+const RESERVED_SLUGS = new Set(['admin']);
+
+const cachedActivation = (slug) =>
+  RESERVED_SLUGS.has(slug)
+    ? Promise.resolve(undefined)
+    : activationCache.get(slug, () => db.getActivationBySlug(slug));
 
 // An admin action (approve, edit, close voting, reset) must show up immediately,
 // not up to 30s later — so mutations blow the caches away rather than wait out
@@ -109,6 +118,12 @@ const adminLoginLimit = makeRateLimiter({
   keyFn: ipOf,
   message: 'Too many login attempts. Try again later.'
 });
+
+// The login FORM is served from /activations-login, but /activations/admin/login is
+// the URL everyone guesses (it's where the form POSTs). Without this it falls
+// through to the booth-voting route below, is looked up as an activation named
+// "admin", and answers a baffling 404.
+router.get('/admin/login', (req, res) => res.redirect('/activations-login'));
 
 router.post('/admin/login', adminLoginLimit, async (req, res) => {
   const { password } = req.body;

@@ -7,9 +7,14 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#0a0a0a;color:#f0f0f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;min-height:100vh}
-header{background:#111;border-bottom:1px solid #222;padding:16px 24px;display:flex;align-items:center;justify-content:space-between}
+header{background:#111;border-bottom:1px solid #222;padding:16px 24px;display:flex;align-items:center;justify-content:space-between;gap:12px}
 header h1{font-size:16px;font-weight:600;letter-spacing:.05em}
 header a{color:#555;font-size:13px;text-decoration:none}
+.sg-logo{display:inline-flex;align-items:center;gap:8px;text-decoration:none;flex-shrink:0}
+.sg-logo img{width:20px;height:20px;object-fit:contain;flex-shrink:0}
+.sg-logo-text{display:flex;flex-direction:column;line-height:1.2}
+.sg-logo-name{font-size:12px;font-weight:600;color:#f0f0f0;letter-spacing:.1em;text-transform:uppercase}
+.sg-logo-sub{font-size:10px;color:#555;letter-spacing:.08em;text-transform:uppercase}
 .container{max-width:900px;margin:0 auto;padding:32px 24px}
 .section{margin-bottom:40px}
 .section-title{font-size:11px;color:#555;text-transform:uppercase;letter-spacing:.1em;margin-bottom:16px}
@@ -27,6 +32,7 @@ textarea{resize:vertical;min-height:60px}
 .activation-name{font-size:15px;font-weight:600}
 .activation-slug{font-size:12px;color:#555;font-family:monospace;margin-top:2px}
 .actions{display:flex;gap:8px;flex-shrink:0}
+.row-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end;flex-shrink:0}
 #detail-view{display:none}
 .back-link{color:#555;font-size:13px;cursor:pointer;margin-bottom:24px;display:inline-block}
 .back-link:hover{color:#fff}
@@ -42,12 +48,40 @@ thead th{text-align:left;padding:8px 12px;font-size:11px;color:#555;text-transfo
 tbody td{padding:10px 12px;border-bottom:1px solid #161616}
 .score{font-weight:700;color:#f0f0f0}
 .qr-url{font-family:monospace;font-size:11px;color:#555;word-break:break-all}
-.tabs{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid #222;padding-bottom:0}
-.tab{padding:8px 16px;font-size:13px;color:#555;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs{display:flex;gap:4px;margin-bottom:24px;border-bottom:1px solid #222;padding-bottom:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab{padding:8px 16px;font-size:13px;color:#555;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap;flex-shrink:0}
 .tab.active{color:#f0f0f0;border-bottom-color:#f0f0f0}
 #msg{font-size:13px;color:#4caf50;margin-top:8px;min-height:20px}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:600px){.two-col{grid-template-columns:1fr}}
+
+/* The detail toolbar mixes buttons with a datetime input, and the global
+   input{width:100%} above would otherwise push it onto a row of its own. */
+.detail-bar{display:flex;align-items:center;gap:10px;margin-bottom:24px;flex-wrap:wrap}
+.detail-bar input[type=datetime-local]{width:auto;margin-bottom:0;flex-shrink:0}
+/* The URL takes the whole first line so the actions below it stay on one tidy
+   row instead of a single button orphaning onto its own. */
+#detail-url{flex:1 0 100%;font-size:12px;color:#555;font-family:monospace;word-break:break-all;margin-bottom:2px}
+.podium{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:24px}
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;align-items:center;justify-content:center;padding:24px;overflow-y:auto}
+.modal-box{background:#111;border:1px solid #222;border-radius:16px;padding:28px;width:100%;max-width:480px;max-height:calc(100vh - 48px);overflow-y:auto}
+
+@media(max-width:600px){
+  .two-col{grid-template-columns:1fr}
+  .container{padding:24px 16px}
+  header{padding:14px 16px}
+  .card{padding:18px}
+  /* Avatar + name + action buttons don't fit side by side on a phone —
+     let the buttons drop to their own full-width row instead of overflowing. */
+  .participant-row{flex-wrap:wrap}
+  .participant-info{flex:1 1 60%;min-width:0}
+  .participant-info .slug{word-break:break-all}
+  .participant-row .row-actions{flex-basis:100%;justify-content:flex-start}
+  .activation-row{flex-wrap:wrap}
+  .podium{grid-template-columns:1fr;gap:8px}
+  .modal-overlay{padding:12px}
+  .modal-box{padding:20px;max-height:calc(100vh - 24px)}
+}
 </style>
 </head>
 <body>
@@ -82,8 +116,8 @@ tbody td{padding:10px 12px;border-bottom:1px solid #161616}
   <div id="detail-view">
     <span class="back-link" onclick="showList()">&larr; All Activations</span>
     <h2 id="detail-title" style="font-size:22px;font-weight:700;margin-bottom:4px"></h2>
-    <div style="display:flex;align-items:center;gap:12px;margin-bottom:24px;flex-wrap:wrap">
-      <p id="detail-url" style="font-size:12px;color:#555;font-family:monospace;flex:1"></p>
+    <div class="detail-bar">
+      <p id="detail-url"></p>
       <a id="master-qr-link" href="#" target="_blank" class="btn-sm" style="text-decoration:none;white-space:nowrap">Master QR</a>
       <a id="winner-page-link" href="#" target="_blank" class="btn-sm" style="text-decoration:none;white-space:nowrap">Winner Page</a>
       <button id="close-voting-btn" class="btn-sm" style="color:#ff4444;border-color:#3a1a1a;white-space:nowrap" onclick="closeVoting()">End Voting Now</button>
@@ -143,7 +177,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #161616}
           </div>
         </div>
         <p style="font-size:11px;color:#333;margin-bottom:20px">Updates every 30 seconds</p>
-        <div id="results-podium" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:24px"></div>
+        <div id="results-podium" class="podium"></div>
         <div id="results-leaderboard"></div>
       </div>
     </div>
@@ -166,8 +200,8 @@ tbody td{padding:10px 12px;border-bottom:1px solid #161616}
 </div>
 
 <!-- Edit Participant Modal -->
-<div id="edit-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:100;align-items:center;justify-content:center;padding:24px">
-  <div style="background:#111;border:1px solid #222;border-radius:16px;padding:28px;width:100%;max-width:480px">
+<div id="edit-modal" class="modal-overlay" style="display:none">
+  <div class="modal-box">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
       <p style="font-size:16px;font-weight:700">Edit Booth</p>
       <button onclick="closeEditModal()" style="background:none;border:none;color:#555;font-size:20px;cursor:pointer;line-height:1">✕</button>
@@ -300,7 +334,7 @@ async function loadPending() {
         ${p.description ? `<div style="font-size:12px;color:#666;margin-top:2px">${p.description}</div>` : ''}
         ${p.contact_email ? `<div style="font-size:11px;color:#444;margin-top:2px">${p.contact_email}</div>` : ''}
       </div>
-      <div style="display:flex;gap:8px">
+      <div class="row-actions">
         <button class="btn-sm" style="color:#4caf50;border-color:#1a3a1a" onclick="approveParticipant(${p.id})">Approve</button>
         <button class="btn-danger" onclick="rejectParticipant(${p.id})">Reject</button>
       </div>
@@ -333,7 +367,7 @@ async function loadParticipants() {
         <div class="name">${p.name}</div>
         <div class="slug">/activations/${currentActivation.slug}/${p.slug}</div>
       </div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end">
+      <div class="row-actions">
         <button class="btn-sm" onclick="copyUrl('${window.location.origin}/activations/${currentActivation.slug}/${p.slug}')">Copy Vote URL</button>
         <a class="btn-sm" href="/activations/${currentActivation.slug}/${p.slug}/profile" target="_blank" style="text-decoration:none">QR Profile</a>
         <button class="btn-sm" onclick="openEditModal(${JSON.stringify(p).replace(/"/g,'&quot;')})">Edit</button>
