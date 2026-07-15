@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node backend/index.js",
     "dev": "node --watch backend/index.js",
+    "test:emails": "node backend/scripts/test-emails.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "type": "commonjs",

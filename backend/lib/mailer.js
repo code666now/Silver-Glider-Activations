@@ -3,6 +3,29 @@ const { frontendUrl: baseUrl } = require('./urls');
 
 const resend = process.env.RESEND_API_KEY ? new Resend(process.env.RESEND_API_KEY) : null;
 
+if (!resend) {
+  console.warn('[mail] RESEND_API_KEY no configurada — todos los envíos de email se omiten silenciosamente.');
+}
+
+// Resend.emails.send() no lanza excepción cuando la API rechaza el envío
+// (dominio sin verificar, API key inválida, destinatario bloqueado…): devuelve
+// { data, error }. Sin inspeccionar ese `error` el correo falla de forma invisible.
+// Este helper centraliza el logging: éxito -> id del email, fallo -> motivo.
+async function sendAndLog(kind, payload) {
+  if (!resend) {
+    console.warn(`[mail] ${kind}: omitido (sin RESEND_API_KEY) -> destinatario ${JSON.stringify(payload.to)}`);
+    return null;
+  }
+  console.log(`[mail] ${kind}: enviando a ${JSON.stringify(payload.to)} (from ${payload.from}, subject "${payload.subject}")`);
+  const { data, error } = await resend.emails.send(payload);
+  if (error) {
+    console.error(`[mail] ${kind}: Resend RECHAZÓ el envío a ${JSON.stringify(payload.to)} ->`, error);
+    return null;
+  }
+  console.log(`[mail] ${kind}: enviado OK a ${JSON.stringify(payload.to)} -> id ${data && data.id}`);
+  return data;
+}
+
 async function sendBoothConfirmation({ to, boothName, activationName, profileUrl }) {
   if (!resend) return;
   const html = `
@@ -37,7 +60,7 @@ async function sendBoothConfirmation({ to, boothName, activationName, profileUrl
 </body>
 </html>`;
 
-  await resend.emails.send({
+  await sendAndLog('booth confirmation', {
     from: process.env.RESEND_FROM || 'booths@silverglidertix.com',
     to,
     subject: `Your booth is live — ${activationName}`,
@@ -46,7 +69,6 @@ async function sendBoothConfirmation({ to, boothName, activationName, profileUrl
 }
 
 async function sendWelcomeEmail({ to }) {
-  if (!resend) return;
   const url = baseUrl();
   const html = `
 <!DOCTYPE html>
@@ -104,7 +126,7 @@ async function sendWelcomeEmail({ to }) {
 </body>
 </html>`;
 
-  await resend.emails.send({
+  await sendAndLog('welcome', {
     from: process.env.RESEND_FROM || 'activations@silverglidertix.com',
     to,
     subject: `Good taste confirmed.`,
@@ -113,7 +135,6 @@ async function sendWelcomeEmail({ to }) {
 }
 
 async function sendAdminBoothNotification({ boothName, activationName, contactEmail, contactPhone, instagramHandle, profileUrl }) {
-  if (!resend) return;
   const html = `
 <!DOCTYPE html>
 <html>
@@ -150,7 +171,7 @@ async function sendAdminBoothNotification({ boothName, activationName, contactEm
 </body>
 </html>`;
 
-  await resend.emails.send({
+  await sendAndLog('admin notification', {
     from: process.env.RESEND_FROM || 'activations@silverglidertix.com',
     to: process.env.ACTIVATIONS_ADMIN_NOTIFY_EMAIL || 'rosewoodmarketin@gmail.com',
     subject: `New booth: ${boothName} — ${activationName}`,

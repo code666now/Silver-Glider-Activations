@@ -283,12 +283,15 @@ router.post('/:activationSlug/join', upload.single('image'), async (req, res, ne
     invalidateActivationCaches();
     if (contact_email) {
       const profileUrl = `${frontendUrl()}/activations/${activation.slug}/${slug}/profile`;
+      console.log(`[join] booth "${name}" registrado con contact_email=${contact_email} — disparando emails (confirmación + aviso admin)`);
       // Deliberately not awaited: a slow or down Resend must not make registration
       // fail or hang. But a swallowed error is an invisible one — log it.
       sendBoothConfirmation({ to: contact_email, boothName: name, activationName: activation.name, profileUrl })
         .catch((e) => console.error('[mail] booth confirmation failed:', e.message));
       sendAdminBoothNotification({ boothName: name, activationName: activation.name, contactEmail: contact_email, contactPhone: contact_phone, instagramHandle: instagram_handle, profileUrl })
         .catch((e) => console.error('[mail] admin notification failed:', e.message));
+    } else {
+      console.log(`[join] booth "${name}" registrado SIN contact_email — no se envía ningún email.`);
     }
     res.json({ success: true, participant });
   } catch (err) {
