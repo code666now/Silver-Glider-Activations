@@ -5,6 +5,19 @@ async function runMigrations() {
   await pool.query('ALTER TABLE sg_participants ADD COLUMN IF NOT EXISTS instagram_handle TEXT');
   await pool.query('ALTER TABLE sg_participants ADD COLUMN IF NOT EXISTS booth_song_url TEXT');
   await pool.query('ALTER TABLE sg_activation_optins ADD COLUMN IF NOT EXISTS email TEXT');
+  // The shared DB may already have sg_activation_optins from the ticketing repo, with a
+  // legacy `phone TEXT NOT NULL` column this service never writes to. CREATE TABLE IF NOT
+  // EXISTS no-ops on the existing table, so every optin INSERT (email only) trips that
+  // NOT NULL. Drop the constraint if the column is present (guarded so fresh DBs skip it).
+  await pool.query(`DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'sg_activation_optins' AND column_name = 'phone'
+      ) THEN
+        ALTER TABLE sg_activation_optins ALTER COLUMN phone DROP NOT NULL;
+      END IF;
+    END $$`);
   await pool.query('ALTER TABLE sg_activations ADD COLUMN IF NOT EXISTS voting_closed BOOLEAN DEFAULT FALSE');
   await pool.query('ALTER TABLE sg_activations ADD COLUMN IF NOT EXISTS voting_ends_at TIMESTAMPTZ');
   // Dedup enforcement: remove any duplicate votes, then replace the plain index with a UNIQUE one
