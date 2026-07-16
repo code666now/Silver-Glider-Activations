@@ -518,6 +518,9 @@ header .sub{font-size:14px;color:#888;margin-top:6px}
 #error-msg{color:#ff4444;font-size:13px;margin-top:10px;text-align:center}
 .progress{height:4px;background:#222;border-radius:2px;margin-top:16px;display:none}
 .progress-bar{height:100%;background:#1CC5BE;border-radius:2px;width:0%;transition:width .3s}
+#loader-wrap{display:none;justify-content:center;margin-top:28px}
+.loader{width:50px;padding:8px;aspect-ratio:1;border-radius:50%;background:#25b09b;--_m:conic-gradient(#0000 10%,#000),linear-gradient(#000 0 0) content-box;-webkit-mask:var(--_m);mask:var(--_m);-webkit-mask-composite:source-out;mask-composite:subtract;animation:l3 1s infinite linear}
+@keyframes l3{to{transform:rotate(1turn)}}
 .sg-logo{display:inline-flex;align-items:center;gap:7px;text-decoration:none;opacity:.45}
 .sg-logo img{width:16px;height:16px;object-fit:contain;filter:grayscale(1)}
 .sg-logo-name{display:block;font-size:10px;font-weight:600;color:#fff;letter-spacing:.1em;text-transform:uppercase}
@@ -605,6 +608,7 @@ header .sub{font-size:14px;color:#888;margin-top:6px}
     </div>
 
     <button class="btn" id="submit-btn" onclick="submitForm()" style="margin-top:36px">Register My Booth</button>
+    <div id="loader-wrap"><div class="loader"></div></div>
     <div id="error-msg"></div>
   </div>
 
@@ -645,7 +649,7 @@ async function submitForm() {
   const contactEmail = document.getElementById('contact-email').value.trim();
   const contactPhone = document.getElementById('contact-phone') ? document.getElementById('contact-phone').value.trim() : '';
   const instagramHandle = document.getElementById('instagram-handle').value.trim().replace(/^@/, '');
-  const boothSongUrl = document.getElementById('booth-song-url').value.trim();
+  const boothSongUrl = document.getElementById('booth-song-url') ? document.getElementById('booth-song-url').value.trim() : '';
   const imageFile = document.getElementById('image-file').files[0];
   const errEl = document.getElementById('error-msg');
   const btn = document.getElementById('submit-btn');
@@ -654,7 +658,8 @@ async function submitForm() {
   if (!name) { errEl.textContent = 'Booth name is required.'; return; }
 
   btn.disabled = true;
-  btn.textContent = 'Uploading...';
+  btn.style.display = 'none';
+  document.getElementById('loader-wrap').style.display = 'flex';
   document.getElementById('progress-bar-wrap').style.display = 'block';
   document.getElementById('progress-bar').style.width = '30%';
 
@@ -673,15 +678,24 @@ async function submitForm() {
     const res = await fetch(window.location.pathname, { method: 'POST', body: formData });
     const data = await res.json();
     document.getElementById('progress-bar').style.width = '100%';
-    if (data.error) { errEl.textContent = data.error; btn.disabled = false; btn.textContent = 'Register My Booth'; return; }
+    if (data.error) { errEl.textContent = data.error; resetSubmitUI(); return; }
     document.getElementById('form-view').style.display = 'none';
     document.getElementById('success').style.display = 'block';
     if (contactEmail) document.getElementById('success-email-note').style.display = 'block';
   } catch (e) {
     errEl.textContent = 'Something went wrong. Try again.';
-    btn.disabled = false;
-    btn.textContent = 'Register My Booth';
+    resetSubmitUI();
   }
+}
+
+function resetSubmitUI() {
+  const btn = document.getElementById('submit-btn');
+  btn.disabled = false;
+  btn.textContent = 'Register My Booth';
+  btn.style.display = '';
+  document.getElementById('loader-wrap').style.display = 'none';
+  document.getElementById('progress-bar-wrap').style.display = 'none';
+  document.getElementById('progress-bar').style.width = '0%';
 }
 </script>
 </body>
