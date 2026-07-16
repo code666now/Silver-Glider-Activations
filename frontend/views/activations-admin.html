@@ -371,6 +371,7 @@ async function loadParticipants() {
         <button class="btn-sm" onclick="copyUrl('${window.location.origin}/activations/${currentActivation.slug}/${p.slug}')">Copy Vote URL</button>
         <a class="btn-sm" href="/activations/${currentActivation.slug}/${p.slug}/profile" target="_blank" style="text-decoration:none">QR Profile</a>
         <button class="btn-sm" onclick="openEditModal(${JSON.stringify(p).replace(/"/g,'&quot;')})">Edit</button>
+        <button class="btn-sm" onclick="deleteParticipant(${p.id})" style="color:#ff6b6b;border-color:rgba(255,107,107,.35)">Delete</button>
       </div>
     </div>
   `).join('');
@@ -519,6 +520,15 @@ async function loadOptins() {
 
 function copyUrl(url) {
   navigator.clipboard.writeText(url);
+}
+
+async function deleteParticipant(id) {
+  const row = document.getElementById('prow-' + id);
+  const name = row ? row.querySelector('.name').textContent : 'this booth';
+  if (!confirm(`Delete "${name}"? This permanently removes the booth and all of its votes. This cannot be undone.`)) return;
+  const result = await api(`/activations/admin/activations/participants/${id}`, 'DELETE');
+  if (result && result.error) { alert(result.error); return; }
+  loadParticipants();
 }
 
 function exportCSV() {
