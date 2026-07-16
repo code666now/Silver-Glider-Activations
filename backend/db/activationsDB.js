@@ -173,6 +173,33 @@ async function resetVotes(activation_id) {
   return { deleted: r.rowCount };
 }
 
+// Full restart: wipe the votes AND reopen voting. resetVotes alone leaves
+// voting_closed=TRUE, so a contest that already crowned a winner stays frozen —
+// empty leaderboard, nobody able to vote. There is no winner flag to clear:
+// getWinner derives it from the votes, so deleting them retires the winner too,
+// which is why this works the same whether or not a winner was declared.
+// One transaction: a wipe that half-applied would leave votes with voting reopened.
+async function restartContest(activation_id) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const del = await client.query('DELETE FROM sg_activation_votes WHERE activation_id = $1', [activation_id]);
+    const r = await client.query(
+      `UPDATE sg_activations
+       SET voting_closed = FALSE, voting_ends_at = NULL, active = TRUE
+       WHERE id = $1 RETURNING *`,
+      [activation_id]
+    );
+    await client.query('COMMIT');
+    return { deleted: del.rowCount, activation: r.rows[0] };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 async function getResultsByActivation(activation_id) {
   const r = await pool.query(`
     SELECT
@@ -221,5 +248,6 @@ module.exports = {
   setVotingEndsAt, autoCloseExpired, getWinner, countPositiveVotes,
   getParticipantsByActivation, getParticipantBySlug, createParticipant, updateParticipant,
   getPendingParticipants, approveParticipant, rejectParticipant,
-  castVote, getResultsByActivation, createOptin, getOptinsByActivation, getOptinByEmail, resetVotes
+  castVote, getResultsByActivation, createOptin, getOptinsByActivation, getOptinByEmail, resetVotes,
+  restartContest
 };

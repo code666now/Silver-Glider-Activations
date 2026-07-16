@@ -124,6 +124,7 @@ tbody td{padding:10px 12px;border-bottom:1px solid #161616}
       <input type="datetime-local" id="voting-ends-input" class="btn-sm" style="color:#aaa;background:#111;border:1px solid #222;padding:6px 10px;border-radius:6px;font-size:12px" title="Auto-close voting at this time">
       <button class="btn-sm" style="white-space:nowrap" onclick="setVotingEndsAt()">Set End Time</button>
       <button class="btn-sm" style="color:#ff4444;border-color:#3a1a1a;white-space:nowrap" onclick="resetVotes()">Reset All Votes</button>
+      <button id="restart-contest-btn" class="btn-sm" style="color:#ff4444;border-color:#3a1a1a;white-space:nowrap" onclick="restartContest()">Restart Contest</button>
     </div>
 
     <div class="tabs">
@@ -248,6 +249,11 @@ async function api(path, method='GET', body=null) {
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(path, opts);
   if (res.status === 401) { window.location.href = '/activations-login'; return; }
+  // A 404 or 5xx arrives as Express's HTML error page. res.json() would throw a
+  // SyntaxError that hides the real status, so hand callers a normal { error } object
+  // instead. JSON error bodies (400 with { error }) still parse and pass through.
+  const isJson = (res.headers.get('content-type') || '').includes('application/json');
+  if (!isJson) return { error: `Server error (HTTP ${res.status}). The endpoint may not be deployed yet.` };
   return res.json();
 }
 
@@ -561,6 +567,33 @@ async function resetVotes() {
   const result = await api(`/activations/admin/activations/${currentActivation.id}/reset-votes`, 'POST');
   if (result.error) return alert(result.error);
   alert(result.deleted + ' votes deleted. The contest starts fresh.');
+  loadParticipants();
+}
+
+// Restores the End Voting Now button. closeVoting() greys it out and leaves it
+// that way for the rest of the session, so after a restart it would still read
+// "Voting Closed" over a contest that is open again.
+function resetCloseVotingButton() {
+  const btn = document.getElementById('close-voting-btn');
+  btn.disabled = false;
+  btn.textContent = 'End Voting Now';
+  btn.style.color = '#ff4444';
+  btn.style.borderColor = '#3a1a1a';
+}
+
+async function restartContest() {
+  if (!confirm('Restart ' + currentActivation.name + '? This deletes every vote, retires the current winner and reopens voting for a fresh round.')) return;
+  if (!confirm('Are you sure? All votes will be permanently deleted. Booths and their QR codes stay as they are.')) return;
+  const btn = document.getElementById('restart-contest-btn');
+  btn.disabled = true;
+  btn.textContent = 'Restarting...';
+  const result = await api(`/activations/admin/activations/${currentActivation.id}/restart`, 'POST');
+  btn.disabled = false;
+  btn.textContent = 'Restart Contest';
+  if (result.error) return alert(result.error);
+  resetCloseVotingButton();
+  document.getElementById('voting-ends-input').value = '';
+  alert(result.deleted + ' votes deleted. Voting is open again and the end time was cleared.');
   loadParticipants();
 }
 

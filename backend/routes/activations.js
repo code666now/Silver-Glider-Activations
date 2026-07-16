@@ -230,6 +230,19 @@ router.post('/admin/activations/participants/:id/reject', requireActivationsAdmi
   }
 });
 
+// Permanently delete a booth from the admin list. Reuses the reject query (DELETE +
+// RETURNING); the schema cascades to sg_activation_votes and sg_activation_optins.
+router.delete('/admin/activations/participants/:id', requireActivationsAdmin, async (req, res, next) => {
+  try {
+    const participant = await db.rejectParticipant(req.params.id);
+    if (!participant) return res.status(404).json({ error: 'Booth not found' });
+    invalidateActivationCaches();
+    res.json({ success: true, deleted: participant });
+  } catch (err) {
+    next(err);
+  }
+});
+
 router.get('/admin/activations/:id/results', requireActivationsAdmin, async (req, res, next) => {
   try {
     const [results, optins] = await Promise.all([
@@ -335,6 +348,20 @@ router.post('/admin/activations/:id/close-voting', requireActivationsAdmin, asyn
 router.post('/admin/activations/:id/reset-votes', requireActivationsAdmin, async (req, res, next) => {
   try {
     const result = await db.resetVotes(req.params.id);
+    invalidateActivationCaches();
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/admin/activations/:id/restart', requireActivationsAdmin, async (req, res, next) => {
+  try {
+    const result = await db.restartContest(req.params.id);
+    if (!result.activation) return res.status(404).json({ error: 'Activation not found' });
+    // Same reason as close-voting: the vote endpoint reads voting_closed off the
+    // cached activation, so without this the contest stays closed for a full TTL
+    // after the restart and the first attendees to scan still get a dead page.
     invalidateActivationCaches();
     res.json(result);
   } catch (err) {
